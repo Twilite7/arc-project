@@ -9,6 +9,9 @@ contract ClaudeUSD {
     mapping(address => uint256) public balances;
     mapping(address => mapping(address => uint256)) public allowances;
 
+    event Transfer(address indexed from, address indexed to, uint256 amount);
+    event Approval(address indexed owner, address indexed spender, uint256 amount);
+
     constructor() {
         balances[msg.sender] = totalSupply;
     }
@@ -17,10 +20,12 @@ contract ClaudeUSD {
         require(balances[msg.sender] >= amount, "Insufficient balance");
         balances[msg.sender] -=amount;
         balances[to] += amount;
+        emit Transfer(msg.sender, to, amount);
     }
 
     function approve(address spender, uint256 amount) public {
         allowances[msg.sender][spender] = amount;
+        emit Approval(msg.sender, spender, amount);
     }
 
     function transferFrom(address from, address to, uint256 amount) public {
@@ -29,5 +34,6 @@ contract ClaudeUSD {
         allowances[from][msg.sender] -= amount;
         balances[from] -= amount;
         balances[to] += amount;
+        emit Transfer(msg.sender, to, amount);
     }
 }
