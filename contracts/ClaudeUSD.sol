@@ -5,7 +5,7 @@ contract ClaudeUSD {
     // Metadata
     string public name = "ClaudeUSD";
     string public symbol = "CUSD";
-    uint8 public decimals = 18;
+    uint8 public decimals = 6;
 
     // Supply and balances
     uint256 public totalSupply;
@@ -18,7 +18,7 @@ contract ClaudeUSD {
 
     // Constructor — mint full supply to deployer with 18 decimals
     constructor() {
-        totalSupply = 9999 * 10 ** 18;
+        totalSupply = 9999 * 10 ** 6;
         _balances[msg.sender] = totalSupply;
         emit Transfer(address(0), msg.sender, totalSupply);
     }

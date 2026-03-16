@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "skills": {
+    "use-arc": {
+      "source": "circlefin/skills",
+      "sourceType": "github",
+      "computedHash": "25c6529f418b9efd35aa734a3389c02380b826157a172ffc86acb3646993918d"
+    },
+    "use-smart-contract-platform": {
+      "source": "circlefin/skills",
+      "sourceType": "github",
+      "computedHash": "51254a6946d2d2f815ae39eca3dcf6457eff2b176db45d0bfe9be32a4689ea0a"
+    },
+    "use-usdc": {
+      "source": "circlefin/skills",
+      "sourceType": "github",
+      "computedHash": "4565510760bcb34b179666f3aca6d1f851d9d03b76aefc9e8a97a7fc14ac6597"
+    }
+  }
+}
