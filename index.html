@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ClaudeUSD Dashboard</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/5.7.2/ethers.umd.min.js"></script>  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0f0f0f; color: #e0e0e0; font-family: monospace; padding: 40px 20px; }
+    h1 { color: #00d395; margin-bottom: 8px; }
+    p.sub { color: #888; font-size: 13px; margin-bottom: 32px; }
+    .card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px; padding: 24px; margin-bottom: 20px; }
+    .card h2 { font-size: 13px; color: #888; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
+    .value { font-size: 28px; color: #fff; font-weight: bold; }
+    .address { font-size: 12px; color: #555; margin-top: 6px; word-break: break-all; }
+    input { width: 100%; padding: 10px 14px; background: #111; border: 1px solid #333; border-radius: 8px; color: #fff; font-family: monospace; font-size: 14px; margin-bottom: 10px; }
+    button { padding: 10px 20px; border: none; border-radius: 8px; font-family: monospace; font-size: 14px; cursor: pointer; margin-right: 8px; margin-bottom: 8px; }
+    .btn-primary { background: #00d395; color: #000; font-weight: bold; }
+    .btn-danger { background: #ff4444; color: #fff; font-weight: bold; }
+    .btn-secondary { background: #2a2a2a; color: #e0e0e0; }
+    .status { margin-top: 16px; font-size: 13px; color: #00d395; word-break: break-all; min-height: 20px; }
+    .status.error { color: #ff4444; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    @media(max-width: 600px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+
+  <h1>ClaudeUSD Dashboard</h1>
+  <p class="sub">CUSD · Arc Testnet · ERC-20</p>
+
+  <div class="card">
+    <h2>Wallet</h2>
+    <div class="value" id="walletAddress">Not connected</div>
+    <div class="address" id="network"></div>
+    <br/>
+    <button class="btn-primary" onclick="connectWallet()">Connect Wallet</button>
+    <button class="btn-secondary" onclick="refreshData()">Refresh</button>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Your Balance</h2>
+      <div class="value" id="balance">—</div>
+      <div class="address">CUSD</div>
+    </div>
+    <div class="card">
+      <h2>Total Supply</h2>
+      <div class="value" id="totalSupply">—</div>
+      <div class="address">CUSD</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Transfer</h2>
+    <input id="transferTo" placeholder="Recipient address (0x...)"/>
+    <input id="transferAmount" placeholder="Amount (e.g. 10)"/>
+    <button class="btn-primary" onclick="transfer()">Send CUSD</button>
+    <div class="status" id="transferStatus"></div>
+  </div>
+
+  <div class="card">
+    <h2>Mint (Owner Only)</h2>
+    <input id="mintTo" placeholder="Mint to address (0x...)"/>
+    <input id="mintAmount" placeholder="Amount (e.g. 500)"/>
+    <button class="btn-primary" onclick="mint()">Mint CUSD</button>
+    <div class="status" id="mintStatus"></div>
+  </div>
+
+  <div class="card">
+    <h2>Burn</h2>
+    <input id="burnAmount" placeholder="Amount to burn (e.g. 100)"/>
+    <button class="btn-danger" onclick="burn()">Burn CUSD</button>
+    <div class="status" id="burnStatus"></div>
+  </div>
+
+  <script>
+    const CONTRACT_ADDRESS = "0x0030Bb033e01bF1749F2Aeb8d249578c405EC3a4";
+    const ABI = [
+      "function name() view returns (string)",
+      "function symbol() view returns (string)",
+      "function decimals() view returns (uint8)",
+      "function totalSupply() view returns (uint256)",
+      "function balanceOf(address) view returns (uint256)",
+      "function transfer(address to, uint256 amount) returns (bool)",
+      "function mint(address to, uint256 amount)",
+      "function burn(uint256 amount)",
+      "function owner() view returns (address)"
+    ];
+
+    let provider, signer, contract;
+
+async function connectWallet() {
+  try {
+    if (!window.ethereum) throw new Error("No wallet detected. Install Rabby or MetaMask.");
+    
+    // Request switch to Arc Testnet
+    try {
+      await window.ethereum.request({
+        method: "wallet_switchEthereumChain",
+        params: [{ chainId: "0x4CEF52" }], // 5042002 in hex
+      });
+    } catch (switchError) {
+      // Chain not added yet — add it
+      if (switchError.code === 4902) {
+        await window.ethereum.request({
+          method: "wallet_addEthereumChain",
+          params: [{
+            chainId: "0x4CEF52",
+            chainName: "Arc Testnet",
+            nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
+            rpcUrls: ["https://rpc.testnet.arc.network"],
+            blockExplorerUrls: ["https://testnet.arcscan.app"]
+          }]
+        });
+      }
+    }
+
+    provider = new ethers.providers.Web3Provider(window.ethereum);
+    await provider.send("eth_requestAccounts", []);
+    signer = provider.getSigner();
+    contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer);
+    await refreshData();
+  } catch (err) {
+    document.getElementById("walletAddress").innerText = "Error: " + err.message;
+  }
+}
+    async function refreshData() {
+      try {
+        const address = await signer.getAddress();
+        const network = await provider.getNetwork();
+        document.getElementById("walletAddress").innerText = address;
+        document.getElementById("network").innerText = "Chain ID: " + network.chainId;
+
+        const balance = await contract.balanceOf(address);
+        const supply = await contract.totalSupply();
+        document.getElementById("balance").innerText = ethers.utils.formatUnits(balance, 6);
+        document.getElementById("totalSupply").innerText = ethers.utils.formatUnits(supply, 6);
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    async function transfer() {
+      const status = document.getElementById("transferStatus");
+      try {
+        status.className = "status";
+        status.innerText = "Sending...";
+        const to = document.getElementById("transferTo").value;
+        const amount = ethers.utils.parseUnits(document.getElementById("transferAmount").value, 6);
+        const tx = await contract.transfer(to, amount);
+        await tx.wait();
+        status.innerText = "✓ Sent! Tx: " + tx.hash;
+        await refreshData();
+      } catch (err) {
+        status.className = "status error";
+        status.innerText = "Error: " + err.message;
+      }
+    }
+
+    async function mint() {
+      const status = document.getElementById("mintStatus");
+      try {
+        status.className = "status";
+        status.innerText = "Minting...";
+        const to = document.getElementById("mintTo").value;
+        const amount = ethers.utils.parseUnits(document.getElementById("mintAmount").value, 6);
+        const tx = await contract.mint(to, amount);
+        await tx.wait();
+        status.innerText = "✓ Minted! Tx: " + tx.hash;
+        await refreshData();
+      } catch (err) {
+        status.className = "status error";
+        status.innerText = "Error: " + err.message;
+      }
+    }
+
+    async function burn() {
+      const status = document.getElementById("burnStatus");
+      try {
+        status.className = "status";
+        status.innerText = "Burning...";
+        const amount = ethers.utils.parseUnits(document.getElementById("burnAmount").value, 6);
+        const tx = await contract.burn(amount);
+        await tx.wait();
+        status.innerText = "✓ Burned! Tx: " + tx.hash;
+        await refreshData();
+      } catch (err) {
+        status.className = "status error";
+        status.innerText = "Error: " + err.message;
+      }
+    }
+  </script>
+</body>
+</html>
