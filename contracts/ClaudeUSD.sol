@@ -7,6 +7,9 @@ contract ClaudeUSD {
     string public symbol = "CUSD";
     uint8 public decimals = 6;
 
+    // Ownership
+    address public owner;
+
     // Supply and balances
     uint256 public totalSupply;
     mapping(address => uint256) private _balances;
@@ -16,23 +19,30 @@ contract ClaudeUSD {
     event Transfer(address indexed from, address indexed to, uint256 amount);
     event Approval(address indexed owner, address indexed spender, uint256 amount);
 
-    // Constructor — mint full supply to deployer with 18 decimals
+    // Modifier
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Not owner");
+        _;
+    }
+
+    // Constructor
     constructor() {
+        owner = msg.sender;
         totalSupply = 9999 * 10 ** 6;
         _balances[msg.sender] = totalSupply;
         emit Transfer(address(0), msg.sender, totalSupply);
     }
 
-    // ERC-20 standard read functions
+    // Read functions
     function balanceOf(address account) public view returns (uint256) {
         return _balances[account];
     }
 
-    function allowance(address owner, address spender) public view returns (uint256) {
-        return _allowances[owner][spender];
+    function allowance(address _owner, address spender) public view returns (uint256) {
+        return _allowances[_owner][spender];
     }
 
-    // ERC-20 standard write functions
+    // Write functions
     function transfer(address to, uint256 amount) public returns (bool) {
         require(_balances[msg.sender] >= amount, "Insufficient balance");
         require(to != address(0), "Transfer to zero address");
@@ -58,5 +68,21 @@ contract ClaudeUSD {
         _balances[to] += amount;
         emit Transfer(from, to, amount);
         return true;
+    }
+
+    // Owner only
+    function mint(address to, uint256 amount) public onlyOwner {
+        require(to != address(0), "Mint to zero address");
+        totalSupply += amount;
+        _balances[to] += amount;
+        emit Transfer(address(0), to, amount);
+    }
+
+    // Anyone can burn their own tokens
+    function burn(uint256 amount) public {
+        require(_balances[msg.sender] >= amount, "Insufficient balance");
+        _balances[msg.sender] -= amount;
+        totalSupply -= amount;
+        emit Transfer(msg.sender, address(0), amount);
     }
 }

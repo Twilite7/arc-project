@@ -1,6 +1,6 @@
 import { network } from "hardhat";
 
-const CONTRACT_ADDRESS = "0x8CceC8B8c56F1b970E7A0540d9A20198D93D0834";
+const CONTRACT_ADDRESS = "0x0030Bb033e01bF1749F2Aeb8d249578c405EC3a4";
 const RECIPIENT = "0x000000000000000000000000000000000000dEaD"; // burn address as test recipient
 
 async function main() {
@@ -20,18 +20,26 @@ async function main() {
   const balanceBefore = await contract.balanceOf(deployer.address);
   console.log("Balance Before:", ethers.formatUnits(balanceBefore, 6), "CUSD");
 
-  // Transfer 10 CUSD to burn address
-  const amount = ethers.parseUnits("10", 6);
-  console.log("\nTransferring 10 CUSD to burn address...");
-  const tx = await contract.transfer(RECIPIENT, amount);
-  await tx.wait();
-  console.log("Transaction hash:", tx.hash);
+// Mint 500 CUSD to deployer
+  console.log("\nMinting 500 CUSD...");
+  const mintTx = await contract.mint(deployer.address, ethers.parseUnits("500", 6));
+  await mintTx.wait();
+  console.log("Mint tx:", mintTx.hash);
 
-  // Check balance after
-  const balanceAfter = await contract.balanceOf(deployer.address);
-  console.log("Balance After:", ethers.formatUnits(balanceAfter, 6), "CUSD");
+  const afterMint = await contract.balanceOf(deployer.address);
+  console.log("Balance after mint:", ethers.formatUnits(afterMint, 6), "CUSD");
 
-  await connection.close();
+  // Burn 100 CUSD
+  console.log("\nBurning 100 CUSD...");
+  const burnTx = await contract.burn(ethers.parseUnits("100", 6));
+  await burnTx.wait();
+  console.log("Burn tx:", burnTx.hash);
+
+  const afterBurn = await contract.balanceOf(deployer.address);
+  console.log("Balance after burn:", ethers.formatUnits(afterBurn, 6), "CUSD");
+
+  const finalSupply = await contract.totalSupply();
+  console.log("Final total supply:", ethers.formatUnits(finalSupply, 6), "CUSD");
 }
 
 main().catch((err) => {
