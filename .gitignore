@@ -21,3 +21,6 @@
 
 # Environment variables
 .env
+kubo/
+kubo_v0.27.0_linux-amd64.tar.gz
+upload.sh
