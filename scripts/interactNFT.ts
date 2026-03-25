@@ -1,6 +1,6 @@
 import { network } from "hardhat";
 
-const CONTRACT_ADDRESS = "0xd63c0E595E390094b3D3670740e6463C9F02dA1F";
+const CONTRACT_ADDRESS = "0x430F60E18B4aE0BF8282133aC449C472a81af61B";
 async function main() {
   const connection = await network.connect();
   const ethers = connection.ethers;

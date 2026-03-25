@@ -7,7 +7,7 @@ async function main() {
   console.log("Deploying with account:", deployer.address);
 
   const Factory = await ethers.getContractFactory("ClaudeNFT", deployer);
-  const contract = await Factory.deploy("ipfs://bafybeiemc2iyvwkhe4agqmuo7ihsrnwohxuykwmcowgvu7ludttt5sx7ly/");
+  const contract = await Factory.deploy("ipfs://QmciKWM83qCEpSnYzJe3rDB4z55z4Lzk6uoKtE6gYUo8uC/"); 
   await contract.waitForDeployment();
 
   console.log("ClaudeNFT deployed to:", await contract.getAddress());

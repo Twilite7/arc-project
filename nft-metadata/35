@@ -1,0 +1,20 @@
+{
+  "name": "ClaudeNFT #35",
+  "description": "A ClaudeNFT on Robinhood Chain. Enter the Matrix.",
+  "image": "ipfs://bafkreiam7uy6pwtswrsaj3jabaz4iewxfmnurok2oorxmhcj6hoe3fuwoe",
+  "version": "2",
+  "attributes": [
+    {
+      "trait_type": "Collection",
+      "value": "ClaudeNFT"
+    },
+    {
+      "trait_type": "Network",
+      "value": "Robinhood Chain"
+    },
+    {
+      "trait_type": "Token ID",
+      "value": 35
+    }
+  ]
+}
