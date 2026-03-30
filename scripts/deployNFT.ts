@@ -6,11 +6,11 @@ async function main() {
   const [deployer] = await ethers.getSigners();
   console.log("Deploying with account:", deployer.address);
 
-  const Factory = await ethers.getContractFactory("ClaudeNFT", deployer);
-  const contract = await Factory.deploy("ipfs://QmciKWM83qCEpSnYzJe3rDB4z55z4Lzk6uoKtE6gYUo8uC/"); 
+  const Factory = await ethers.getContractFactory("XylemNFT", deployer);
+  const contract = await Factory.deploy("ipfs://QmciKWM83qCEpSnYzJe3rDB4z55z4Lzk6uoKtE6gYUo8uC/");
   await contract.waitForDeployment();
 
-  console.log("ClaudeNFT deployed to:", await contract.getAddress());
+  console.log("XylemNFT deployed to:", await contract.getAddress());
   await connection.close();
 }
 
