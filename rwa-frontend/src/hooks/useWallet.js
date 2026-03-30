@@ -36,5 +36,12 @@ export function useWallet() {
     } catch (e) { setError(e.message); }
   }, []);
 
-  return { provider, signer, address, error, connect };
+  const disconnect = useCallback(() => {
+    setProvider(null);
+    setSigner(null);
+    setAddress("");
+    setError("");
+  }, []);
+
+  return { provider, signer, address, error, connect, disconnect };
 }

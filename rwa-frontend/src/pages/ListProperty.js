@@ -34,6 +34,7 @@ async function uploadToPinata(file) {
   return data.IpfsHash;
 }
 
+// I validate all fields before touching the signer
 function validateForm(form) {
   if (!form.location.trim()) return "Location is required.";
   const lat = parseFloat(form.latitude);
@@ -63,6 +64,8 @@ export default function ListProperty({ wallet }) {
   function handleImageChange(e) {
     const file = e.target.files[0];
     if (!file) return;
+
+    // I guard type and size before accepting the file
     if (!file.type.startsWith("image/")) {
       setStatus("File must be an image (jpg, png, webp, etc.).");
       return;
@@ -71,7 +74,10 @@ export default function ListProperty({ wallet }) {
       setStatus("Image must be under 5MB.");
       return;
     }
+
+    // I revoke the old object URL to prevent memory leaks
     if (preview) URL.revokeObjectURL(preview);
+
     set("imageFile", file);
     setPreview(URL.createObjectURL(file));
     setStatus("");
@@ -79,6 +85,7 @@ export default function ListProperty({ wallet }) {
 
   async function handleSubmit() {
     if (!wallet.signer) { setStatus("Connect wallet first."); return; }
+
     const validationError = validateForm(form);
     if (validationError) { setStatus(validationError); return; }
 
@@ -93,12 +100,14 @@ export default function ListProperty({ wallet }) {
         return;
       }
 
+      // I upload image to IPFS first if one was selected
       let imageCid = null;
       if (form.imageFile) {
         setStatus("Uploading image to IPFS...");
         imageCid = await uploadToPinata(form.imageFile);
       }
 
+      // I encode description + image CID together so no contract changes are needed
       const descPayload = JSON.stringify({
         desc: form.description,
         ...(imageCid && { image: `ipfs://${imageCid}` }),
@@ -110,6 +119,7 @@ export default function ListProperty({ wallet }) {
         : ethers.keccak256(ethers.toUtf8Bytes("placeholder-docs-" + Date.now()));
 
       setStatus("Sign the property details in MetaMask...");
+
       const messageHash = ethers.solidityPackedKeccak256(
         ["string", "string", "string", "string", "uint256", "bytes32"],
         [form.location, form.latitude, form.longitude, form.size, price, docsHash]
@@ -190,12 +200,9 @@ export default function ListProperty({ wallet }) {
 
         <div>
           <label style={labelStyle}>Property Image (max 5MB)</label>
-          <input
-            type="file"
-            accept="image/*"
+          <input type="file" accept="image/*"
             style={{ fontSize: 12, color: "var(--mid)" }}
-            onChange={handleImageChange}
-          />
+            onChange={handleImageChange} />
           {preview && (
             <div style={{ marginTop: 12 }}>
               <img src={preview} alt="preview"
@@ -232,8 +239,7 @@ export default function ListProperty({ wallet }) {
             padding: "12px 16px", borderRadius: 2, fontSize: 12,
             background: status.includes("Error") || status.includes("required") || status.includes("must")
               ? "rgba(139,44,44,0.06)" : "rgba(45,106,79,0.06)",
-            border: `1px solid ${
-              status.includes("Error") || status.includes("required") || status.includes("must")
+            border: `1px solid ${status.includes("Error") || status.includes("required") || status.includes("must")
               ? "var(--red)" : "var(--green)"}30`,
             color: status.includes("Error") || status.includes("required") || status.includes("must")
               ? "var(--red)" : "var(--green)",

@@ -1,10 +1,13 @@
 import { useState, useEffect } from "react";
 import { ethers } from "ethers";
-import { useRegistry } from "../hooks/useRegistry.js";
 import StatusBadge from "../components/StatusBadge.jsx";
+import RegistryABI from "../abis/PropertyRegistry.json";
+import EscrowABI from "../abis/PropertyEscrow.json";
 
-const GATEWAY = "https://gateway.pinata.cloud/ipfs";
-const ZERO_ADDR = "0x0000000000000000000000000000000000000000";
+const REGISTRY_ADDRESS = "0xC435b05C568aE2Be474C4E68448f9c7c504f3855";
+const ESCROW_ADDRESS   = "0xfc3553E0A744c0B2B0c9953B5cA215689ECB3C60";
+const GATEWAY          = "https://gateway.pinata.cloud/ipfs";
+const ZERO_ADDR        = "0x0000000000000000000000000000000000000000";
 
 function parseDescription(raw) {
   try {
@@ -18,8 +21,14 @@ function parseDescription(raw) {
   }
 }
 
+function getRegistry(signerOrProvider) {
+  return new ethers.Contract(REGISTRY_ADDRESS, RegistryABI.abi, signerOrProvider);
+}
+function getEscrow(signerOrProvider) {
+  return new ethers.Contract(ESCROW_ADDRESS, EscrowABI.abi, signerOrProvider);
+}
+
 export default function BuyProperty({ wallet, tokenId }) {
-  const reg = useRegistry(wallet.signer, wallet.provider);
   const [prop, setProp] = useState(null);
   const [deal, setDeal] = useState(null);
   const [status, setStatus] = useState("");
@@ -27,40 +36,73 @@ export default function BuyProperty({ wallet, tokenId }) {
   const [inputId, setInputId] = useState(tokenId || "");
 
   async function loadProperty(id) {
-    if (!wallet.provider || !id) return;
+    if (!id) return;
     setStatus("");
     try {
-      const registry = reg.getRegistry(wallet.provider);
-      const escrow = reg.getEscrow(wallet.provider);
-      const p = await registry.getProperty(id);
-      const owner = await registry.ownerOf(id);
-      setProp({ ...p, tokenId: id, owner, status: Number(p.status) });
+      const provider = wallet.provider;
+      if (!provider) { setStatus("Connect your wallet first."); return; }
 
-      const hasActive = await escrow.hasActiveDeal(id);
+      const registry = getRegistry(provider);
+      const escrow = getEscrow(provider);
+      const tokenIdBig = BigInt(id);
+
+      const p = await registry.getProperty(tokenIdBig);
+      const owner = await registry.ownerOf(tokenIdBig);
+
+      setProp({
+        tokenId: tokenIdBig,
+        owner,
+        status: Number(p.status),
+        location: p.location,
+        latitude: p.latitude,
+        longitude: p.longitude,
+        size: p.size,
+        price: p.price,
+        description: p.description,
+        docsHash: p.docsHash,
+      });
+
+      const hasActive = await escrow.hasActiveDeal(tokenIdBig);
       if (hasActive) {
-        const d = await escrow.getDealByToken(id);
+        const d = await escrow.getDealByToken(tokenIdBig);
         setDeal(d);
       } else {
         setDeal(null);
       }
     } catch (e) {
-      setStatus("Property not found.");
+      setStatus("Property not found: " + (e.reason || e.message));
       setProp(null);
       setDeal(null);
     }
   }
 
-  useEffect(() => { if (tokenId) loadProperty(tokenId); }, [tokenId, wallet.provider]);
+  useEffect(() => {
+    if (tokenId && wallet.provider) loadProperty(tokenId);
+  }, [tokenId, wallet.provider]);
 
   async function openDeal() {
     if (!wallet.signer || !prop) return;
     setLoading(true); setStatus("Opening escrow deal...");
     try {
-      const escrow = reg.getEscrow(wallet.signer);
+      const escrow = getEscrow(wallet.signer);
       const tx = await escrow.openDeal(prop.tokenId);
       await tx.wait();
       setStatus("Deal opened. Now a buyer can deposit.");
-      await loadProperty(prop.tokenId);
+      await loadProperty(prop.tokenId.toString());
+    } catch (e) { setStatus("Error: " + (e.reason || e.message)); }
+    setLoading(false);
+  }
+
+  async function cancelDeal() {
+    if (!wallet.signer || !prop) return;
+    setLoading(true); setStatus("Cancelling deal...");
+    try {
+      const escrow = getEscrow(wallet.signer);
+      const dealId = await escrow.tokenToDeal(prop.tokenId);
+      const tx = await escrow.cancelDeal(dealId);
+      await tx.wait();
+      setStatus("Deal cancelled. Property is available again.");
+      await loadProperty(prop.tokenId.toString());
     } catch (e) { setStatus("Error: " + (e.reason || e.message)); }
     setLoading(false);
   }
@@ -69,12 +111,12 @@ export default function BuyProperty({ wallet, tokenId }) {
     if (!wallet.signer || !deal) return;
     setLoading(true); setStatus("Confirm deposit in MetaMask...");
     try {
-      const escrow = reg.getEscrow(wallet.signer);
+      const escrow = getEscrow(wallet.signer);
       const dealId = await escrow.tokenToDeal(prop.tokenId);
       const tx = await escrow.deposit(dealId, { value: prop.price });
       await tx.wait();
       setStatus("Deposited. Now sign to finalise the deal.");
-      await loadProperty(prop.tokenId);
+      await loadProperty(prop.tokenId.toString());
     } catch (e) { setStatus("Error: " + (e.reason || e.message)); }
     setLoading(false);
   }
@@ -83,7 +125,7 @@ export default function BuyProperty({ wallet, tokenId }) {
     if (!wallet.signer || !deal) return;
     setLoading(true); setStatus("Sign the deal in MetaMask...");
     try {
-      const escrow = reg.getEscrow(wallet.signer);
+      const escrow = getEscrow(wallet.signer);
       const dealId = await escrow.tokenToDeal(prop.tokenId);
       const dealData = await escrow.getDeal(dealId);
       const buyerMessageHash = ethers.solidityPackedKeccak256(
@@ -94,7 +136,7 @@ export default function BuyProperty({ wallet, tokenId }) {
       const tx = await escrow.buyerSign(dealId, buyerSig);
       await tx.wait();
       setStatus("Deal completed! Property transferred to your wallet.");
-      await loadProperty(prop.tokenId);
+      await loadProperty(prop.tokenId.toString());
     } catch (e) { setStatus("Error: " + (e.reason || e.message)); }
     setLoading(false);
   }
@@ -103,7 +145,7 @@ export default function BuyProperty({ wallet, tokenId }) {
     if (!wallet.signer) return;
     setLoading(true); setStatus("Checking pending balance...");
     try {
-      const escrow = reg.getEscrow(wallet.signer);
+      const escrow = getEscrow(wallet.signer);
       const pending = await escrow.getPendingWithdrawal(wallet.address);
       if (pending === 0n) { setStatus("No funds to withdraw."); setLoading(false); return; }
       setStatus("Withdrawing funds...");
@@ -121,13 +163,15 @@ export default function BuyProperty({ wallet, tokenId }) {
     deal.buyer.toLowerCase() === wallet.address.toLowerCase() &&
     deal.buyer.toLowerCase() !== ZERO_ADDR;
 
-  // I check explicitly for zero address — JS falsy check alone isn't reliable here
-  const noBuyerYet = !deal?.buyer ||
-    deal.buyer.toLowerCase() === ZERO_ADDR;
+  const noBuyerYet = !deal?.buyer || deal.buyer.toLowerCase() === ZERO_ADDR;
 
-  const { desc, imageSrc } = prop ? parseDescription(prop.description) : { desc: "", imageSrc: null };
+  const { desc, imageSrc } = prop
+    ? parseDescription(prop.description)
+    : { desc: "", imageSrc: null };
 
-  const isError = status.startsWith("Error") || status === "Property not found.";
+  const isError = status.startsWith("Error") ||
+    status.startsWith("Property not found") ||
+    status.startsWith("Connect");
 
   return (
     <div style={{ maxWidth: 600 }}>
@@ -138,7 +182,6 @@ export default function BuyProperty({ wallet, tokenId }) {
         <h1 style={{ fontSize: 48, fontWeight: 300 }}>Acquire Property</h1>
       </div>
 
-      {/* Token lookup */}
       <div style={{ display: "flex", gap: 12, marginBottom: 32 }}>
         <input
           style={{
@@ -157,7 +200,6 @@ export default function BuyProperty({ wallet, tokenId }) {
         }}>Load</button>
       </div>
 
-      {/* Property details */}
       {prop && (
         <div style={{
           background: "var(--warm-white)", border: "1px solid var(--border)",
@@ -169,7 +211,7 @@ export default function BuyProperty({ wallet, tokenId }) {
           )}
           <div style={{ padding: 28 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
-              <span style={{ fontSize: 11, color: "var(--mid)" }}>Token #{prop.tokenId}</span>
+              <span style={{ fontSize: 11, color: "var(--mid)" }}>Token #{prop.tokenId.toString()}</span>
               <StatusBadge status={prop.status} />
             </div>
             <h2 style={{ fontSize: 24, fontWeight: 400, marginBottom: 8 }}>{prop.location}</h2>
@@ -178,7 +220,7 @@ export default function BuyProperty({ wallet, tokenId }) {
               {[
                 ["GPS", `${prop.latitude}, ${prop.longitude}`],
                 ["Size", prop.size],
-                ["Price", `${ethers.formatEther(prop.price)} ETH`],
+                ["Price", prop.price ? `${ethers.formatEther(prop.price)} ETH` : "..."],
               ].map(([k, v]) => (
                 <div key={k}>
                   <div style={{ fontSize: 10, color: "var(--mid)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>{k}</div>
@@ -190,9 +232,9 @@ export default function BuyProperty({ wallet, tokenId }) {
         </div>
       )}
 
-      {/* Action buttons */}
       {prop && (
         <div style={{ display: "grid", gap: 12 }}>
+
           {/* Seller: open deal */}
           {isSeller && prop.status === 0 && (
             <button onClick={openDeal} disabled={loading} style={{
@@ -202,13 +244,23 @@ export default function BuyProperty({ wallet, tokenId }) {
             }}>Open Escrow Deal</button>
           )}
 
-          {/* Buyer: deposit — explicit zero-address check */}
-          {!isSeller && prop.status === 1 && deal && noBuyerYet && (
+          {/* Seller: cancel deal — only if no buyer has deposited yet */}
+          {isSeller && prop.status === 1 && noBuyerYet && (
+            <button onClick={cancelDeal} disabled={loading} style={{
+              padding: "12px", border: "1px solid var(--red)",
+              background: "transparent", borderRadius: 2,
+              fontSize: 12, letterSpacing: "0.08em", textTransform: "uppercase",
+              cursor: "pointer", color: "var(--red)",
+            }}>Cancel Deal</button>
+          )}
+
+          {/* Buyer: deposit */}
+          {!isSeller && prop.status === 1 && noBuyerYet && (
             <button onClick={deposit} disabled={loading} style={{
               padding: "12px", border: "none",
               background: "var(--charcoal)", color: "var(--warm-white)",
               borderRadius: 2, fontSize: 12, letterSpacing: "0.08em", textTransform: "uppercase", cursor: "pointer",
-            }}>Deposit {ethers.formatEther(prop.price)} ETH</button>
+            }}>Deposit {prop.price ? ethers.formatEther(prop.price) : "..."} ETH</button>
           )}
 
           {/* Buyer: sign */}
@@ -228,6 +280,7 @@ export default function BuyProperty({ wallet, tokenId }) {
               fontSize: 12, color: "var(--mid)", letterSpacing: "0.08em", textTransform: "uppercase", cursor: "pointer",
             }}>Withdraw Pending Funds</button>
           )}
+
         </div>
       )}
 
