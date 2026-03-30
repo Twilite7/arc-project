@@ -2,6 +2,7 @@
 
 @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Sans:wght@300;400;500&display=swap');
 
+/* ── Light mode (default) ── */
 :root {
   --cream: #f7f4ef;
   --warm-white: #fdfcfa;
@@ -16,6 +17,21 @@
   --shadow: 0 2px 20px rgba(26,26,24,0.08);
 }
 
+/* ── Dark mode ── */
+.dark {
+  --cream: #111110;
+  --warm-white: #1a1a18;
+  --charcoal: #f0ece4;
+  --mid: #9b9b96;
+  --light: #3a3a36;
+  --gold: #d4af50;
+  --gold-light: #e8c96a;
+  --green: #4a9a72;
+  --red: #c05050;
+  --border: rgba(240,236,228,0.1);
+  --shadow: 0 2px 20px rgba(0,0,0,0.3);
+}
+
 body {
   background: var(--cream);
   color: var(--charcoal);
@@ -23,6 +39,7 @@ body {
   font-size: 14px;
   line-height: 1.6;
   min-height: 100vh;
+  transition: background 0.2s, color 0.2s;
 }
 
 h1, h2, h3, h4 {

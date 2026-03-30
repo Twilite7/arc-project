@@ -10,7 +10,7 @@ export default function Browse({ wallet, onBuy }) {
         <p style={{ fontSize: 11, color: "var(--gold)", letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 12 }}>
           On-Chain Real Estate
         </p>
-        <h1 style={{ fontSize: 52, fontWeight: 300, marginBottom: 16 }}>
+        <h1 style={{ fontSize: 52, fontWeight: 300, marginBottom: 16, color: "var(--gold)" }}>
           Tokenized Properties
         </h1>
         <p style={{ color: "var(--mid)", maxWidth: 480 }}>

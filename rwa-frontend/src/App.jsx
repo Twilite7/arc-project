@@ -9,6 +9,7 @@ import { useWallet } from "./hooks/useWallet.js";
 export default function App() {
   const [page, setPage] = useState("browse");
   const [selectedTokenId, setSelectedTokenId] = useState(null);
+  const [darkMode, setDarkMode] = useState(false);
   const wallet = useWallet();
 
   function goToBuy(tokenId) {
@@ -17,8 +18,8 @@ export default function App() {
   }
 
   return (
-    <div style={{ minHeight: "100vh", background: "var(--cream)" }}>
-      <Navbar page={page} setPage={setPage} wallet={wallet} />
+    <div className={darkMode ? "dark" : ""} style={{ minHeight: "100vh", background: "var(--cream)" }}>
+      <Navbar page={page} setPage={setPage} wallet={wallet} darkMode={darkMode} setDarkMode={setDarkMode} />
       <main style={{ maxWidth: 1100, margin: "0 auto", padding: "40px 24px 80px" }}>
         {page === "browse"  && <Browse wallet={wallet} onBuy={goToBuy} />}
         {page === "list"    && <ListProperty wallet={wallet} />}
