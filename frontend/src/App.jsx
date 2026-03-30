@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { ethers } from "ethers";
-import ClaudeNFT from "./ClaudeNFT.json";
+import XylemNFT from "./XylemNFT.json";
 
-const CONTRACT_ADDRESS = "0x9c6B711782686528d63799f92211630711d07B0F";
+const CONTRACT_ADDRESS = "0xF32967C098Fd11091836F9531A53A77fB76c4CA0";
 const ROBINHOOD_CHAIN_ID = 46630;
 
 // Matrix rain canvas
@@ -23,7 +23,6 @@ function MatrixRain() {
       drops.forEach((y, i) => {
         const char = chars[Math.floor(Math.random() * chars.length)];
         const x = i * 16;
-        // bright lead char
         ctx.fillStyle = i % 7 === 0 ? "#afffaf" : "#00ff41";
         ctx.fillText(char, x, y * 16);
         if (y * 16 > canvas.height && Math.random() > 0.975) drops[i] = 0;
@@ -63,10 +62,19 @@ export default function App() {
   const [status, setStatus] = useState("");
   const [statusType, setStatusType] = useState("info");
   const [whitelistInput, setWhitelistInput] = useState("");
+  const [batchInput, setBatchInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => { setTimeout(() => setMounted(true), 200); }, []);
+
+  // I reload on network switch so state never goes stale
+  useEffect(() => {
+    if (!window.ethereum) return;
+    const handler = () => window.location.reload();
+    window.ethereum.on("chainChanged", handler);
+    return () => window.ethereum.removeListener("chainChanged", handler);
+  }, []);
 
   function setMsg(msg, type = "info") { setStatus(msg); setStatusType(type); }
 
@@ -81,7 +89,7 @@ export default function App() {
       }
       const _signer = await _provider.getSigner();
       const _address = await _signer.getAddress();
-      const _contract = new ethers.Contract(CONTRACT_ADDRESS, ClaudeNFT.abi, _signer);
+      const _contract = new ethers.Contract(CONTRACT_ADDRESS, XylemNFT.abi, _signer);
       setContract(_contract); setAddress(_address);
       const owner = await _contract.owner();
       const supply = await _contract.totalSupply();
@@ -115,6 +123,24 @@ export default function App() {
       await tx.wait();
       setMsg("// AGENT WHITELISTED: " + whitelistInput.slice(0, 10) + "...", "success");
       setWhitelistInput("");
+    } catch (err) { setMsg("// ERROR: " + err.message, "error"); }
+    setLoading(false);
+  }
+
+  // I parse a comma or newline separated list of addresses for batch whitelist
+  async function addBatchWhitelist() {
+    if (!contract || !batchInput) return;
+    const addresses = batchInput
+      .split(/[\n,]+/)
+      .map(a => a.trim())
+      .filter(a => ethers.isAddress(a));
+    if (addresses.length === 0) { setMsg("// ERROR: No valid addresses found.", "error"); return; }
+    setLoading(true); setMsg(`// BATCH WHITELISTING ${addresses.length} AGENTS...`, "info");
+    try {
+      const tx = await contract.addToWhitelistBatch(addresses);
+      await tx.wait();
+      setMsg(`// ${addresses.length} AGENTS WHITELISTED.`, "success");
+      setBatchInput("");
     } catch (err) { setMsg("// ERROR: " + err.message, "error"); }
     setLoading(false);
   }
@@ -325,7 +351,7 @@ export default function App() {
       <div className={`wrap ${mounted ? "in" : ""}`}>
         <div className="header">
           <span className="sys-label">SYSTEM INITIALIZED // ROBINHOOD CHAIN TESTNET</span>
-          <h1>ClaudeNFT</h1>
+          <h1>XylemNFT</h1>
           <p className="subtitle">ERC-721 PROTOCOL · MAX_SUPPLY=100 · PRICE=0.0001_ETH</p>
         </div>
 
@@ -393,6 +419,21 @@ export default function App() {
             />
             <button className="btn btn-outline" onClick={addToWhitelist} disabled={loading}>
               [ ADD TO WHITELIST ]
+            </button>
+
+            <div className="divider" />
+
+            <div className="card-title">Batch Whitelist</div>
+            <textarea
+              className="input"
+              rows={4}
+              placeholder={"0xABC...\n0xDEF...\n0x123..."}
+              value={batchInput}
+              onChange={(e) => setBatchInput(e.target.value)}
+              style={{ resize: "vertical" }}
+            />
+            <button className="btn btn-outline" onClick={addBatchWhitelist} disabled={loading}>
+              [ BATCH WHITELIST ]
             </button>
 
             <div className="divider" />
