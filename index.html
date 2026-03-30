@@ -3,8 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>ClaudeUSD Dashboard</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/5.7.2/ethers.umd.min.js"></script>  <style>
+  <title>XylemUSD Dashboard</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/5.7.2/ethers.umd.min.js"></script>
+  <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { background: #0f0f0f; color: #e0e0e0; font-family: monospace; padding: 40px 20px; }
     h1 { color: #00d395; margin-bottom: 8px; }
@@ -26,8 +27,8 @@
 </head>
 <body>
 
-  <h1>ClaudeUSD Dashboard</h1>
-  <p class="sub">CUSD · Arc Testnet · ERC-20</p>
+  <h1>XylemUSD Dashboard</h1>
+  <p class="sub">XUSD · Arc Testnet · ERC-20</p>
 
   <div class="card">
     <h2>Wallet</h2>
@@ -42,12 +43,12 @@
     <div class="card">
       <h2>Your Balance</h2>
       <div class="value" id="balance">—</div>
-      <div class="address">CUSD</div>
+      <div class="address">XUSD</div>
     </div>
     <div class="card">
       <h2>Total Supply</h2>
       <div class="value" id="totalSupply">—</div>
-      <div class="address">CUSD</div>
+      <div class="address">XUSD</div>
     </div>
   </div>
 
@@ -55,7 +56,7 @@
     <h2>Transfer</h2>
     <input id="transferTo" placeholder="Recipient address (0x...)"/>
     <input id="transferAmount" placeholder="Amount (e.g. 10)"/>
-    <button class="btn-primary" onclick="transfer()">Send CUSD</button>
+    <button class="btn-primary" onclick="transfer()">Send XUSD</button>
     <div class="status" id="transferStatus"></div>
   </div>
 
@@ -63,19 +64,19 @@
     <h2>Mint (Owner Only)</h2>
     <input id="mintTo" placeholder="Mint to address (0x...)"/>
     <input id="mintAmount" placeholder="Amount (e.g. 500)"/>
-    <button class="btn-primary" onclick="mint()">Mint CUSD</button>
+    <button class="btn-primary" onclick="mint()">Mint XUSD</button>
     <div class="status" id="mintStatus"></div>
   </div>
 
   <div class="card">
     <h2>Burn</h2>
     <input id="burnAmount" placeholder="Amount to burn (e.g. 100)"/>
-    <button class="btn-danger" onclick="burn()">Burn CUSD</button>
+    <button class="btn-danger" onclick="burn()">Burn XUSD</button>
     <div class="status" id="burnStatus"></div>
   </div>
 
   <script>
-    const CONTRACT_ADDRESS = "0x0030Bb033e01bF1749F2Aeb8d249578c405EC3a4";
+    const CONTRACT_ADDRESS = "0x7b7821a895fE26bF3C6A8293D4b984f10A7E38b5";
     const ABI = [
       "function name() view returns (string)",
       "function symbol() view returns (string)",
@@ -83,48 +84,55 @@
       "function totalSupply() view returns (uint256)",
       "function balanceOf(address) view returns (uint256)",
       "function transfer(address to, uint256 amount) returns (bool)",
+      "function approve(address spender, uint256 amount) returns (bool)",
+      "function increaseAllowance(address spender, uint256 addedValue) returns (bool)",
+      "function decreaseAllowance(address spender, uint256 subtractedValue) returns (bool)",
       "function mint(address to, uint256 amount)",
       "function burn(uint256 amount)",
-      "function owner() view returns (address)"
+      "function owner() view returns (address)",
+      "function transferOwnership(address newOwner)"
     ];
 
     let provider, signer, contract;
 
-async function connectWallet() {
-  try {
-    if (!window.ethereum) throw new Error("No wallet detected. Install Rabby or MetaMask.");
-    
-    // Request switch to Arc Testnet
-    try {
-      await window.ethereum.request({
-        method: "wallet_switchEthereumChain",
-        params: [{ chainId: "0x4CEF52" }], // 5042002 in hex
-      });
-    } catch (switchError) {
-      // Chain not added yet — add it
-      if (switchError.code === 4902) {
-        await window.ethereum.request({
-          method: "wallet_addEthereumChain",
-          params: [{
-            chainId: "0x4CEF52",
-            chainName: "Arc Testnet",
-            nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
-            rpcUrls: ["https://rpc.testnet.arc.network"],
-            blockExplorerUrls: ["https://testnet.arcscan.app"]
-          }]
-        });
+    async function connectWallet() {
+      try {
+        if (!window.ethereum) throw new Error("No wallet detected. Install Rabby or MetaMask.");
+
+        try {
+          await window.ethereum.request({
+            method: "wallet_switchEthereumChain",
+            params: [{ chainId: "0x4CEF52" }],
+          });
+        } catch (switchError) {
+          if (switchError.code === 4902) {
+            await window.ethereum.request({
+              method: "wallet_addEthereumChain",
+              params: [{
+                chainId: "0x4CEF52",
+                chainName: "Arc Testnet",
+                nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
+                rpcUrls: ["https://rpc.testnet.arc.network"],
+                blockExplorerUrls: ["https://testnet.arcscan.app"]
+              }]
+            });
+          }
+        }
+
+        provider = new ethers.providers.Web3Provider(window.ethereum);
+        await provider.send("eth_requestAccounts", []);
+        signer = provider.getSigner();
+        contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer);
+
+        // I reload on network switch so state never goes stale
+        window.ethereum.on("chainChanged", () => window.location.reload());
+
+        await refreshData();
+      } catch (err) {
+        document.getElementById("walletAddress").innerText = "Error: " + err.message;
       }
     }
 
-    provider = new ethers.providers.Web3Provider(window.ethereum);
-    await provider.send("eth_requestAccounts", []);
-    signer = provider.getSigner();
-    contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer);
-    await refreshData();
-  } catch (err) {
-    document.getElementById("walletAddress").innerText = "Error: " + err.message;
-  }
-}
     async function refreshData() {
       try {
         const address = await signer.getAddress();
