@@ -3,7 +3,7 @@ import { network } from "hardhat";
 async function main() {
   const CONTRACT_ADDRESS = "0x9Cab223CC238602dbd9d7c438E0aa9Ac89382090";
   const SPENDER          = "0x88CF4649FA51F1e62Ad815F6F14291Ad52096AdE";
-  const AMOUNT           = "50"; // I want to approve and transfer this many CUSD
+  const AMOUNT           = "50"; // I want to approve and transfer this many XUSD
 
   const connection = await network.connect("arcTestnet");
   const ethers = connection.ethers;
@@ -11,7 +11,7 @@ async function main() {
   const [deployer] = await ethers.getSigners();
   console.log("Owner (you):  ", deployer.address);
   console.log("Spender:      ", SPENDER);
-  console.log("Amount:       ", AMOUNT, "CUSD");
+  console.log("Amount:       ", AMOUNT, "XUSD");
   console.log("---");
 
   const abi = [
@@ -21,15 +21,15 @@ async function main() {
     "function transferFrom(address, address, uint256) returns (bool)",
   ];
 
-  // I attach to my deployed ClaudeUSD contract
+  // I attach to my deployed XylemUSD contract
   const token = await ethers.getContractAt(abi, CONTRACT_ADDRESS, deployer);
   const rawAmount = ethers.parseUnits(AMOUNT, 18);
 
   // I check the state before doing anything
   const balanceBefore   = await token.balanceOf(deployer.address);
   const allowanceBefore = await token.allowance(deployer.address, SPENDER);
-  console.log("Balance before:   ", ethers.formatUnits(balanceBefore, 18), "CUSD");
-  console.log("Allowance before: ", ethers.formatUnits(allowanceBefore, 18), "CUSD");
+  console.log("Balance before:   ", ethers.formatUnits(balanceBefore, 18), "XUSD");
+  console.log("Allowance before: ", ethers.formatUnits(allowanceBefore, 18), "XUSD");
   console.log("---");
 
   // I call approve() to grant the spender permission to move my tokens
@@ -41,7 +41,7 @@ async function main() {
 
   // I verify the allowance was set correctly before moving on
   const allowanceAfterApprove = await token.allowance(deployer.address, SPENDER);
-  console.log("Allowance after approve:", ethers.formatUnits(allowanceAfterApprove, 18), "CUSD");
+  console.log("Allowance after approve:", ethers.formatUnits(allowanceAfterApprove, 18), "XUSD");
   console.log("---");
 
   // I call transferFrom() to simulate the spender pulling tokens on my behalf
@@ -59,9 +59,9 @@ async function main() {
   const allowanceAfter = await token.allowance(deployer.address, SPENDER);
   const spenderBalance = await token.balanceOf(SPENDER);
 
-  console.log("My balance after:       ", ethers.formatUnits(balanceAfter, 18), "CUSD");
-  console.log("Spender balance after:  ", ethers.formatUnits(spenderBalance, 18), "CUSD");
-  console.log("Allowance after:        ", ethers.formatUnits(allowanceAfter, 18), "CUSD");
+  console.log("My balance after:       ", ethers.formatUnits(balanceAfter, 18), "XUSD");
+  console.log("Spender balance after:  ", ethers.formatUnits(spenderBalance, 18), "XUSD");
+  console.log("Allowance after:        ", ethers.formatUnits(allowanceAfter, 18), "XUSD");
 
   await connection.close();
 }

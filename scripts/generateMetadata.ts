@@ -14,12 +14,12 @@ if (!fs.existsSync(OUTPUT_DIR)) {
 
 for (let i = 1; i <= 100; i++) {
   const metadata = {
-    name: `ClaudeNFT #${i}`,
-    description: "A ClaudeNFT on Robinhood Chain. Enter the Matrix.",
+    name: `XylemNFT #${i}`,
+    description: "A XylemNFT on Robinhood Chain. Enter the Matrix.",
     image: `ipfs://${IMAGE_CID}`,
     version: "2",
     attributes: [
-      { trait_type: "Collection", value: "ClaudeNFT" },
+      { trait_type: "Collection", value: "XylemNFT" },
       { trait_type: "Network", value: "Robinhood Chain" },
       { trait_type: "Token ID", value: i }
     ]

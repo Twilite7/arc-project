@@ -7,7 +7,7 @@ async function main() {
   const [deployer] = await ethers.getSigners();
   console.log("Connected wallet:", deployer.address);
 
-  const contract = await ethers.getContractAt("ClaudeNFT", CONTRACT_ADDRESS, deployer);
+  const contract = await ethers.getContractAt("XylemNFT", CONTRACT_ADDRESS, deployer);
 
   // Whitelist deployer
   console.log("\nAdding to whitelist...");
