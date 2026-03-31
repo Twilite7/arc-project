@@ -16,12 +16,14 @@ const labelStyle = {
 
 export default function AdminDashboard({ wallet }) {
   const reg = useRegistry(wallet.signer, wallet.provider);
-  const [listerAddr, setListerAddr] = useState("");
-  const [feeInput, setFeeInput] = useState("");
+  const [listerAddr, setListerAddr]   = useState("");
+  const [feeInput, setFeeInput]       = useState("");
   const [feeRecipient, setFeeRecipient] = useState("");
-  const [expiryDays, setExpiryDays] = useState("");
-  const [status, setStatus] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [expiryDays, setExpiryDays]   = useState("");
+  const [dealId, setDealId]           = useState("");
+  const [rejectReason, setRejectReason] = useState("");
+  const [status, setStatus]           = useState("");
+  const [loading, setLoading]         = useState(false);
 
   function msg(m) { setStatus(m); }
 
@@ -72,6 +74,35 @@ export default function AdminDashboard({ wallet }) {
       await tx.wait();
       msg(`Expiry updated to ${expiryDays} days`);
     } catch (e) { msg("Error: " + e.message); }
+    setLoading(false);
+  }
+
+  // I release a deal after off-chain verification passes
+  async function releaseDeal() {
+    if (!wallet.signer || !dealId) return;
+    setLoading(true); msg("Releasing deal — transferring ownership...");
+    try {
+      const escrow = reg.getEscrow(wallet.signer);
+      const tx = await escrow.releaseDeal(BigInt(dealId));
+      await tx.wait();
+      msg(`Deal #${dealId} released. Ownership transferred to buyer.`);
+      setDealId("");
+    } catch (e) { msg("Error: " + (e.reason || e.message)); }
+    setLoading(false);
+  }
+
+  // I reject a deal and refund the buyer if verification fails
+  async function rejectDeal() {
+    if (!wallet.signer || !dealId) return;
+    setLoading(true); msg("Rejecting deal — refunding buyer...");
+    try {
+      const escrow = reg.getEscrow(wallet.signer);
+      const reason = rejectReason.trim() || "Rejected by platform";
+      const tx = await escrow.rejectDeal(BigInt(dealId), reason);
+      await tx.wait();
+      msg(`Deal #${dealId} rejected. Buyer refund queued.`);
+      setDealId(""); setRejectReason("");
+    } catch (e) { msg("Error: " + (e.reason || e.message)); }
     setLoading(false);
   }
 
@@ -130,6 +161,8 @@ export default function AdminDashboard({ wallet }) {
       )}
 
       {wallet.address && (<>
+
+        {/* Verified Listers */}
         {card(<>
           {section("Verified Listers")}
           <label style={labelStyle}>Wallet Address</label>
@@ -140,16 +173,47 @@ export default function AdminDashboard({ wallet }) {
             <button onClick={addLister} disabled={loading} style={{
               padding: "10px", border: "none",
               background: "var(--charcoal)", color: "var(--warm-white)",
-              borderRadius: 2, fontSize: 12, letterSpacing: "0.06em",
+              borderRadius: 2, fontSize: 12, letterSpacing: "0.06em", cursor: "pointer",
             }}>Add Lister</button>
             <button onClick={removeLister} disabled={loading} style={{
               padding: "10px", border: "1px solid var(--border)",
               background: "transparent", borderRadius: 2,
-              fontSize: 12, color: "var(--mid)", letterSpacing: "0.06em",
+              fontSize: 12, color: "var(--mid)", letterSpacing: "0.06em", cursor: "pointer",
             }}>Remove Lister</button>
           </div>
         </>)}
 
+        {/* Deal Management */}
+        {card(<>
+          {section("Deal Management")}
+          <p style={{ fontSize: 12, color: "var(--mid)", marginBottom: 16, lineHeight: 1.6 }}>
+            After verifying off-chain documentation, release a deal to transfer ownership
+            to the buyer. Reject to cancel and refund the buyer in full.
+          </p>
+          <label style={labelStyle}>Deal ID</label>
+          <input style={{ ...inputStyle, marginBottom: 12 }}
+            placeholder="1"
+            type="number" min="1"
+            value={dealId} onChange={e => setDealId(e.target.value)} />
+          <label style={labelStyle}>Rejection Reason (optional)</label>
+          <input style={{ ...inputStyle, marginBottom: 16 }}
+            placeholder="Title deed verification failed"
+            value={rejectReason} onChange={e => setRejectReason(e.target.value)} />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <button onClick={releaseDeal} disabled={loading || !dealId} style={{
+              padding: "10px", border: "none",
+              background: "var(--green)", color: "#fff",
+              borderRadius: 2, fontSize: 12, letterSpacing: "0.06em", cursor: "pointer",
+            }}>Release Deal</button>
+            <button onClick={rejectDeal} disabled={loading || !dealId} style={{
+              padding: "10px", border: "1px solid var(--red)",
+              background: "rgba(139,44,44,0.06)", color: "var(--red)",
+              borderRadius: 2, fontSize: 12, letterSpacing: "0.06em", cursor: "pointer",
+            }}>Reject &amp; Refund</button>
+          </div>
+        </>)}
+
+        {/* Platform Fee */}
         {card(<>
           {section("Platform Fee")}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 12 }}>
@@ -167,10 +231,11 @@ export default function AdminDashboard({ wallet }) {
           <button onClick={updateFee} disabled={loading} style={{
             padding: "10px 20px", border: "none",
             background: "var(--charcoal)", color: "var(--warm-white)",
-            borderRadius: 2, fontSize: 12, letterSpacing: "0.06em",
+            borderRadius: 2, fontSize: 12, letterSpacing: "0.06em", cursor: "pointer",
           }}>Update Fee</button>
         </>)}
 
+        {/* Deal Expiry */}
         {card(<>
           {section("Deal Expiry")}
           <label style={labelStyle}>Expiry (days, 1–30)</label>
@@ -179,22 +244,23 @@ export default function AdminDashboard({ wallet }) {
           <button onClick={updateExpiry} disabled={loading} style={{
             padding: "10px 20px", border: "none",
             background: "var(--charcoal)", color: "var(--warm-white)",
-            borderRadius: 2, fontSize: 12, letterSpacing: "0.06em",
+            borderRadius: 2, fontSize: 12, letterSpacing: "0.06em", cursor: "pointer",
           }}>Update Expiry</button>
         </>)}
 
+        {/* Emergency Controls */}
         {card(<>
           {section("Emergency Controls")}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <button onClick={pauseRegistry} disabled={loading} style={{
-              padding: "10px", border: "1px solid var(--red)30",
+              padding: "10px", border: "1px solid rgba(139,44,44,0.3)",
               background: "rgba(139,44,44,0.06)", color: "var(--red)",
-              borderRadius: 2, fontSize: 12, letterSpacing: "0.06em",
+              borderRadius: 2, fontSize: 12, letterSpacing: "0.06em", cursor: "pointer",
             }}>Pause Registry</button>
             <button onClick={unpauseRegistry} disabled={loading} style={{
-              padding: "10px", border: "1px solid var(--green)30",
+              padding: "10px", border: "1px solid rgba(45,106,79,0.3)",
               background: "rgba(45,106,79,0.06)", color: "var(--green)",
-              borderRadius: 2, fontSize: 12, letterSpacing: "0.06em",
+              borderRadius: 2, fontSize: 12, letterSpacing: "0.06em", cursor: "pointer",
             }}>Unpause Registry</button>
           </div>
         </>)}
@@ -207,6 +273,7 @@ export default function AdminDashboard({ wallet }) {
             color: status.includes("Error") ? "var(--red)" : "var(--green)",
           }}>{status}</div>
         )}
+
       </>)}
     </div>
   );
