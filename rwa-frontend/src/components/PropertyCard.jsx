@@ -92,7 +92,7 @@ export default function PropertyCard({ prop, onBuy }) {
               fontFamily: "Cormorant Garamond, serif",
               fontSize: 20, fontWeight: 600, color: "var(--gold)",
             }}>
-              {ethers.formatEther(prop.price)} ETH
+              {ethers.formatUnits(prop.price, 6)} XUSD
             </div>
           </div>
         </div>
