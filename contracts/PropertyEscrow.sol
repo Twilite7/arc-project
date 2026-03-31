@@ -6,6 +6,8 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 interface IPropertyRegistry {
     enum Status { Available, InEscrow, Sold }
@@ -34,40 +36,42 @@ interface IPropertyRegistry {
 
 contract PropertyEscrow is Ownable2Step, ReentrancyGuard, Pausable {
 
+    using ECDSA for bytes32;
+    using SafeERC20 for IERC20;
+
     enum DealStatus { Open, Completed, Cancelled }
 
     struct Deal {
         uint256 tokenId;
         address seller;
         address buyer;
-        uint256 amount;
+        uint256 amount;      // in XUSD (6 decimals)
         bool buyerSigned;
-        bool sellerConfirmed;
         DealStatus status;
         uint256 createdAt;
     }
 
     uint256 public dealCount;
 
-    // Internal accounting — never use address(this).balance
-    // Protects against force-feed ETH attacks
+    // I track escrowed XUSD internally — never rely on token.balanceOf(this)
+    // Protects against direct token transfers bypassing accounting
     uint256 public totalEscrowedFunds;
 
     mapping(uint256 => Deal) public deals;
     mapping(uint256 => uint256) public tokenToDeal;
     mapping(uint256 => bool) public activeDeal;
 
-    // Pull payment pattern — safer than push
-    // Seller withdraws their funds instead of contract pushing ETH
+    // I use pull payment pattern — recipients withdraw their own funds
     mapping(address => uint256) public pendingWithdrawals;
 
     IPropertyRegistry public immutable registry;
+    IERC20 public immutable paymentToken;  // XylemUSD (XUSD)
+
     uint256 public dealExpiry = 7 days;
     uint256 public platformFeeBps;
     address public feeRecipient;
 
-    event DealOpened(uint256 indexed dealId, uint256 indexed tokenId, address indexed seller, uint256 amount);
-    event BuyerDeposited(uint256 indexed dealId, address indexed buyer);
+    event DealOpened(uint256 indexed dealId, uint256 indexed tokenId, address indexed buyer, uint256 amount);
     event BuyerSigned(uint256 indexed dealId, address indexed buyer);
     event DealCompleted(uint256 indexed dealId, uint256 indexed tokenId, address indexed buyer);
     event DealCancelled(uint256 indexed dealId, string reason);
@@ -93,29 +97,31 @@ contract PropertyEscrow is Ownable2Step, ReentrancyGuard, Pausable {
 
     constructor(
         address _registry,
+        address _paymentToken,
         uint256 _platformFeeBps,
         address _feeRecipient
     ) Ownable(msg.sender) {
         require(_registry != address(0), "Invalid registry address");
+        require(_paymentToken != address(0), "Invalid payment token");
         require(_platformFeeBps <= 1000, "Fee too high, max 10%");
         require(_feeRecipient != address(0), "Invalid fee recipient");
         registry = IPropertyRegistry(_registry);
+        paymentToken = IERC20(_paymentToken);
         platformFeeBps = _platformFeeBps;
         feeRecipient = _feeRecipient;
     }
 
-    // Admin: pause/unpause
+    // ─── Admin ────────────────────────────────────────────────────
+
     function pause() external onlyOwner { _pause(); }
     function unpause() external onlyOwner { _unpause(); }
 
-    // Admin: update deal expiry within safe bounds
     function setDealExpiry(uint256 newExpiry) external onlyOwner {
         require(newExpiry >= 1 days && newExpiry <= 30 days, "Out of range");
         dealExpiry = newExpiry;
         emit DealExpiryUpdated(newExpiry);
     }
 
-    // Admin: update platform fee
     function setPlatformFee(uint256 feeBps, address recipient) external onlyOwner {
         require(feeBps <= 1000, "Fee too high");
         require(recipient != address(0), "Invalid recipient");
@@ -124,69 +130,73 @@ contract PropertyEscrow is Ownable2Step, ReentrancyGuard, Pausable {
         emit PlatformFeeUpdated(feeBps, recipient);
     }
 
-    // Step 1 — Seller opens a deal
-    function openDeal(uint256 tokenId)
-        external whenNotPaused returns (uint256) {
-        require(registry.ownerOf(tokenId) == msg.sender, "Not the property owner");
+    // ─── Step 1: Buyer initiates purchase ─────────────────────────
+    // I pull XUSD from buyer via transferFrom — buyer must approve first
+    // Deal opens and funds are escrowed atomically in one transaction
+    function buyNow(uint256 tokenId)
+        external whenNotPaused nonReentrant returns (uint256) {
+
+        // CHECKS
         require(!activeDeal[tokenId], "Active deal exists for this token");
         require(
             registry.getEscrowContract() == address(this),
-            "This contract is not set as escrow on registry"
+            "This contract is not the registered escrow"
         );
 
         IPropertyRegistry.Property memory prop = registry.getProperty(tokenId);
+        address seller = registry.ownerOf(tokenId);
+
         require(prop.status == IPropertyRegistry.Status.Available, "Property not available");
         require(prop.price > 0, "Invalid price");
+        require(msg.sender != seller, "Seller cannot buy own property");
 
+        // I verify buyer has approved enough XUSD before any state changes
+        uint256 price = prop.price;
+        require(
+            paymentToken.allowance(msg.sender, address(this)) >= price,
+            "Insufficient XUSD allowance, approve first"
+        );
+
+        // EFFECTS — all state changes before external token transfer
         dealCount++;
         uint256 dealId = dealCount;
 
         deals[dealId] = Deal({
             tokenId: tokenId,
-            seller: msg.sender,
-            buyer: address(0),
-            amount: prop.price,
+            seller: seller,
+            buyer: msg.sender,
+            amount: price,
             buyerSigned: false,
-            sellerConfirmed: true,
             status: DealStatus.Open,
             createdAt: block.timestamp
         });
 
         tokenToDeal[tokenId] = dealId;
         activeDeal[tokenId] = true;
+        totalEscrowedFunds += price;
 
+        // INTERACTIONS — token transfer and registry update last
+        // I use SafeERC20 to handle non-standard ERC20 return values
+        paymentToken.safeTransferFrom(msg.sender, address(this), price);
         registry.updateStatus(tokenId, IPropertyRegistry.Status.InEscrow);
 
-        emit DealOpened(dealId, tokenId, msg.sender, prop.price);
+        emit DealOpened(dealId, tokenId, msg.sender, price);
         return dealId;
     }
 
-    // Step 2 — Buyer deposits exact ETH
-    // Uses internal accounting — not address(this).balance
-    function deposit(uint256 dealId)
-        external payable dealExists(dealId) whenNotPaused nonReentrant {
-        Deal storage deal = deals[dealId];
-        require(deal.status == DealStatus.Open, "Deal not open");
-        require(deal.buyer == address(0), "Buyer already deposited");
-        require(msg.value == deal.amount, "Wrong ETH amount");
-        require(msg.sender != deal.seller, "Seller cannot be buyer");
-        require(block.timestamp <= deal.createdAt + dealExpiry, "Deal expired");
-
-        deal.buyer = msg.sender;
-        totalEscrowedFunds += msg.value;
-
-        emit BuyerDeposited(dealId, msg.sender);
-    }
-
-    // Step 3 — Buyer signs to confirm
+    // ─── Step 2: Buyer signs to finalise ──────────────────────────
+    // I verify the buyer's cryptographic signature before transferring ownership
     function buyerSign(uint256 dealId, bytes memory buyerSig)
         external dealExists(dealId) onlyDealBuyer(dealId) whenNotPaused nonReentrant {
+
         Deal storage deal = deals[dealId];
+
+        // CHECKS
         require(deal.status == DealStatus.Open, "Deal not open");
         require(!deal.buyerSigned, "Already signed");
         require(block.timestamp <= deal.createdAt + dealExpiry, "Deal expired");
 
-        // Verify buyer signature
+        // I verify buyer signed the exact deal parameters
         bytes32 messageHash = keccak256(abi.encodePacked(
             dealId, deal.tokenId, deal.seller, msg.sender, deal.amount
         ));
@@ -194,6 +204,7 @@ contract PropertyEscrow is Ownable2Step, ReentrancyGuard, Pausable {
         address recovered = ECDSA.recover(ethHash, buyerSig);
         require(recovered == msg.sender, "Invalid buyer signature");
 
+        // EFFECTS
         deal.buyerSigned = true;
         registry.attachBuyerSig(deal.tokenId, buyerSig);
 
@@ -201,15 +212,11 @@ contract PropertyEscrow is Ownable2Step, ReentrancyGuard, Pausable {
         _finalizeDeal(dealId);
     }
 
-    // Internal — finalize with pull payment pattern
-    // Checks → Effects → Interactions strictly enforced
+    // ─── Internal: finalise with strict CEI ───────────────────────
     function _finalizeDeal(uint256 dealId) internal {
         Deal storage deal = deals[dealId];
-        require(deal.sellerConfirmed && deal.buyerSigned, "Not fully signed");
 
-        // CHECKS — all validations above
-
-        // EFFECTS — update all state before any external interaction
+        // EFFECTS — all state before external calls
         deal.status = DealStatus.Completed;
         activeDeal[deal.tokenId] = false;
 
@@ -220,20 +227,21 @@ contract PropertyEscrow is Ownable2Step, ReentrancyGuard, Pausable {
         uint256 fee = (totalAmount * platformFeeBps) / 10000;
         uint256 sellerAmount = totalAmount - fee;
 
-        // Queue payments via pull pattern — no direct ETH push
+        // I queue XUSD for pull withdrawal — no direct push
         pendingWithdrawals[deal.seller] += sellerAmount;
         if (fee > 0) {
             pendingWithdrawals[feeRecipient] += fee;
         }
 
-        // INTERACTIONS — external calls last
+        // INTERACTIONS — external calls strictly last
         registry.transferProperty(deal.tokenId, deal.seller, deal.buyer);
 
         emit DealCompleted(dealId, deal.tokenId, deal.buyer);
         emit FundsQueued(dealId, deal.seller, sellerAmount);
     }
 
-    // Pull payment — seller/fee recipient withdraws their own funds
+    // ─── Pull payment ─────────────────────────────────────────────
+    // I send XUSD to the caller — effects before interactions
     function withdrawFunds() external nonReentrant {
         uint256 amount = pendingWithdrawals[msg.sender];
         require(amount > 0, "No funds to withdraw");
@@ -241,30 +249,38 @@ contract PropertyEscrow is Ownable2Step, ReentrancyGuard, Pausable {
         // EFFECTS before INTERACTIONS
         pendingWithdrawals[msg.sender] = 0;
 
-        (bool sent, ) = payable(msg.sender).call{value: amount}("");
-        require(sent, "Withdrawal failed");
+        paymentToken.safeTransfer(msg.sender, amount);
 
         emit FundsWithdrawn(msg.sender, amount);
     }
 
-    // Cancel deal — seller only, before buyer deposits
+    // ─── Cancel deal ──────────────────────────────────────────────
+    // I only allow cancel before buyer has deposited
+    // Once buyNow is called XUSD is locked — use expireDeal for refunds
     function cancelDeal(uint256 dealId)
         external dealExists(dealId) onlyDealSeller(dealId) nonReentrant whenNotPaused {
         Deal storage deal = deals[dealId];
+
+        // CHECKS
         require(deal.status == DealStatus.Open, "Deal not open");
         require(deal.buyer == address(0), "Buyer already deposited");
 
+        // EFFECTS
         deal.status = DealStatus.Cancelled;
         activeDeal[deal.tokenId] = false;
 
+        // INTERACTIONS
         registry.updateStatus(deal.tokenId, IPropertyRegistry.Status.Available);
         emit DealCancelled(dealId, "Cancelled by seller");
     }
 
-    // Expire deal — either party triggers after expiry, buyer gets refund
+    // ─── Expire deal ──────────────────────────────────────────────
+    // I refund buyer via pull payment after expiry — no direct push
     function expireDeal(uint256 dealId)
         external dealExists(dealId) nonReentrant {
         Deal storage deal = deals[dealId];
+
+        // CHECKS
         require(deal.status == DealStatus.Open, "Deal not open");
         require(
             msg.sender == deal.seller || msg.sender == deal.buyer,
@@ -272,7 +288,7 @@ contract PropertyEscrow is Ownable2Step, ReentrancyGuard, Pausable {
         );
         require(block.timestamp > deal.createdAt + dealExpiry, "Not yet expired");
 
-        // EFFECTS first
+        // EFFECTS
         deal.status = DealStatus.Cancelled;
         activeDeal[deal.tokenId] = false;
 
@@ -281,26 +297,22 @@ contract PropertyEscrow is Ownable2Step, ReentrancyGuard, Pausable {
 
         if (refundAmount > 0) {
             totalEscrowedFunds -= refundAmount;
+            // I queue refund via pull — buyer calls withdrawFunds()
+            pendingWithdrawals[deal.buyer] += refundAmount;
         }
 
+        // INTERACTIONS
         registry.updateStatus(deal.tokenId, IPropertyRegistry.Status.Available);
-
         emit DealCancelled(dealId, "Deal expired");
-
-        // INTERACTIONS last — refund buyer if they deposited
-        if (deal.buyer != address(0) && refundAmount > 0) {
-            (bool sent, ) = payable(deal.buyer).call{value: refundAmount}("");
-            require(sent, "Refund failed");
-        }
     }
 
-    // Read deal by ID
+    // ─── Read functions ───────────────────────────────────────────
+
     function getDeal(uint256 dealId)
         external view dealExists(dealId) returns (Deal memory) {
         return deals[dealId];
     }
 
-    // Read deal by token — preserves history after completion
     function getDealByToken(uint256 tokenId)
         external view returns (Deal memory) {
         uint256 dealId = tokenToDeal[tokenId];
@@ -308,12 +320,10 @@ contract PropertyEscrow is Ownable2Step, ReentrancyGuard, Pausable {
         return deals[dealId];
     }
 
-    // Check if token has active deal
     function hasActiveDeal(uint256 tokenId) external view returns (bool) {
         return activeDeal[tokenId];
     }
 
-    // Check pending withdrawal for an address
     function getPendingWithdrawal(address account) external view returns (uint256) {
         return pendingWithdrawals[account];
     }

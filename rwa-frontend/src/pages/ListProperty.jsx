@@ -104,7 +104,7 @@ export default function ListProperty({ wallet }) {
         ...(imageCid && { image: `ipfs://${imageCid}` }),
       });
 
-      const price = ethers.parseEther(form.price);
+      const price = ethers.parseUnits(form.price, 6);
       const docsHash = form.docsFile
         ? ethers.keccak256(ethers.toUtf8Bytes(form.docsFile.name + Date.now()))
         : ethers.keccak256(ethers.toUtf8Bytes("placeholder-docs-" + Date.now()));

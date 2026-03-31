@@ -4,10 +4,18 @@ import StatusBadge from "../components/StatusBadge.jsx";
 import RegistryABI from "../abis/PropertyRegistry.json";
 import EscrowABI from "../abis/PropertyEscrow.json";
 
-const REGISTRY_ADDRESS = "0xC435b05C568aE2Be474C4E68448f9c7c504f3855";
-const ESCROW_ADDRESS   = "0xfc3553E0A744c0B2B0c9953B5cA215689ECB3C60";
+const REGISTRY_ADDRESS = "0x6DCD95DD67c342EbfdF4355ef97f1A1ee9553028";
+const ESCROW_ADDRESS   = "0x701FfaaE7a48C7756B2F6115EDC09A8E0331BCf0";
+const XUSD_ADDRESS     = "0x7b7821a895fE26bF3C6A8293D4b984f10A7E38b5";
 const GATEWAY          = "https://gateway.pinata.cloud/ipfs";
 const ZERO_ADDR        = "0x0000000000000000000000000000000000000000";
+
+// Minimal ERC-20 ABI — only what we need for approve + allowance
+const ERC20_ABI = [
+  "function approve(address spender, uint256 amount) returns (bool)",
+  "function allowance(address owner, address spender) view returns (uint256)",
+  "function balanceOf(address account) view returns (uint256)",
+];
 
 function parseDescription(raw) {
   try {
@@ -27,10 +35,15 @@ function getRegistry(signerOrProvider) {
 function getEscrow(signerOrProvider) {
   return new ethers.Contract(ESCROW_ADDRESS, EscrowABI.abi, signerOrProvider);
 }
+function getXUSD(signerOrProvider) {
+  return new ethers.Contract(XUSD_ADDRESS, ERC20_ABI, signerOrProvider);
+}
 
 export default function BuyProperty({ wallet, tokenId }) {
   const [prop, setProp] = useState(null);
   const [deal, setDeal] = useState(null);
+  const [xusdBalance, setXusdBalance] = useState(null);
+  const [xusdAllowance, setXusdAllowance] = useState(null);
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
   const [inputId, setInputId] = useState(tokenId || "");
@@ -69,6 +82,17 @@ export default function BuyProperty({ wallet, tokenId }) {
       } else {
         setDeal(null);
       }
+
+      // I also load XUSD balance and allowance if wallet is connected
+      if (wallet.address) {
+        const xusd = getXUSD(provider);
+        const [bal, allowance] = await Promise.all([
+          xusd.balanceOf(wallet.address),
+          xusd.allowance(wallet.address, ESCROW_ADDRESS),
+        ]);
+        setXusdBalance(bal);
+        setXusdAllowance(allowance);
+      }
     } catch (e) {
       setStatus("Property not found: " + (e.reason || e.message));
       setProp(null);
@@ -80,47 +104,35 @@ export default function BuyProperty({ wallet, tokenId }) {
     if (tokenId && wallet.provider) loadProperty(tokenId);
   }, [tokenId, wallet.provider]);
 
-  async function openDeal() {
+  // ── Step 1: Buyer approves XUSD spending ──────────────────────
+  async function approveXUSD() {
     if (!wallet.signer || !prop) return;
-    setLoading(true); setStatus("Opening escrow deal...");
+    setLoading(true); setStatus("Approving XUSD in MetaMask...");
     try {
-      const escrow = getEscrow(wallet.signer);
-      const tx = await escrow.openDeal(prop.tokenId);
+      const xusd = getXUSD(wallet.signer);
+      const tx = await xusd.approve(ESCROW_ADDRESS, prop.price);
       await tx.wait();
-      setStatus("Deal opened. Now a buyer can deposit.");
+      setStatus("XUSD approved. Now click Buy Now to complete.");
       await loadProperty(prop.tokenId.toString());
     } catch (e) { setStatus("Error: " + (e.reason || e.message)); }
     setLoading(false);
   }
 
-  async function cancelDeal() {
+  // ── Step 2: Buyer calls buyNow — opens deal and escrows XUSD atomically ──
+  async function buyNow() {
     if (!wallet.signer || !prop) return;
-    setLoading(true); setStatus("Cancelling deal...");
+    setLoading(true); setStatus("Submitting purchase in MetaMask...");
     try {
       const escrow = getEscrow(wallet.signer);
-      const dealId = await escrow.tokenToDeal(prop.tokenId);
-      const tx = await escrow.cancelDeal(dealId);
+      const tx = await escrow.buyNow(prop.tokenId);
       await tx.wait();
-      setStatus("Deal cancelled. Property is available again.");
+      setStatus("Purchase submitted. Now sign to finalise ownership transfer.");
       await loadProperty(prop.tokenId.toString());
     } catch (e) { setStatus("Error: " + (e.reason || e.message)); }
     setLoading(false);
   }
 
-  async function deposit() {
-    if (!wallet.signer || !deal) return;
-    setLoading(true); setStatus("Confirm deposit in MetaMask...");
-    try {
-      const escrow = getEscrow(wallet.signer);
-      const dealId = await escrow.tokenToDeal(prop.tokenId);
-      const tx = await escrow.deposit(dealId, { value: prop.price });
-      await tx.wait();
-      setStatus("Deposited. Now sign to finalise the deal.");
-      await loadProperty(prop.tokenId.toString());
-    } catch (e) { setStatus("Error: " + (e.reason || e.message)); }
-    setLoading(false);
-  }
-
+  // ── Step 3: Buyer signs to finalise ───────────────────────────
   async function sign() {
     if (!wallet.signer || !deal) return;
     setLoading(true); setStatus("Sign the deal in MetaMask...");
@@ -135,12 +147,13 @@ export default function BuyProperty({ wallet, tokenId }) {
       const buyerSig = await wallet.signer.signMessage(ethers.getBytes(buyerMessageHash));
       const tx = await escrow.buyerSign(dealId, buyerSig);
       await tx.wait();
-      setStatus("Deal completed! Property transferred to your wallet.");
+      setStatus("Deal complete! Property transferred to your wallet.");
       await loadProperty(prop.tokenId.toString());
     } catch (e) { setStatus("Error: " + (e.reason || e.message)); }
     setLoading(false);
   }
 
+  // ── Seller: withdraw XUSD ─────────────────────────────────────
   async function withdrawFunds() {
     if (!wallet.signer) return;
     setLoading(true); setStatus("Checking pending balance...");
@@ -148,10 +161,10 @@ export default function BuyProperty({ wallet, tokenId }) {
       const escrow = getEscrow(wallet.signer);
       const pending = await escrow.getPendingWithdrawal(wallet.address);
       if (pending === 0n) { setStatus("No funds to withdraw."); setLoading(false); return; }
-      setStatus("Withdrawing funds...");
+      setStatus("Withdrawing XUSD...");
       const tx = await escrow.withdrawFunds();
       await tx.wait();
-      setStatus(`Withdrawn ${ethers.formatEther(pending)} ETH successfully.`);
+      setStatus(`Withdrawn ${ethers.formatUnits(pending, 6)} XUSD successfully.`);
     } catch (e) { setStatus("Error: " + (e.reason || e.message)); }
     setLoading(false);
   }
@@ -164,6 +177,13 @@ export default function BuyProperty({ wallet, tokenId }) {
     deal.buyer.toLowerCase() !== ZERO_ADDR;
 
   const noBuyerYet = !deal?.buyer || deal.buyer.toLowerCase() === ZERO_ADDR;
+
+  // I check if buyer has enough allowance to call buyNow
+  const hasAllowance = xusdAllowance !== null && prop !== null &&
+    xusdAllowance >= prop.price;
+
+  const hasSufficientBalance = xusdBalance !== null && prop !== null &&
+    xusdBalance >= prop.price;
 
   const { desc, imageSrc } = prop
     ? parseDescription(prop.description)
@@ -182,6 +202,7 @@ export default function BuyProperty({ wallet, tokenId }) {
         <h1 style={{ fontSize: 48, fontWeight: 300 }}>Acquire Property</h1>
       </div>
 
+      {/* Token lookup */}
       <div style={{ display: "flex", gap: 12, marginBottom: 32 }}>
         <input
           style={{
@@ -200,6 +221,7 @@ export default function BuyProperty({ wallet, tokenId }) {
         }}>Load</button>
       </div>
 
+      {/* Property card */}
       {prop && (
         <div style={{
           background: "var(--warm-white)", border: "1px solid var(--border)",
@@ -220,7 +242,7 @@ export default function BuyProperty({ wallet, tokenId }) {
               {[
                 ["GPS", `${prop.latitude}, ${prop.longitude}`],
                 ["Size", prop.size],
-                ["Price", prop.price ? `${ethers.formatEther(prop.price)} ETH` : "..."],
+                ["Price", prop.price ? `${ethers.formatUnits(prop.price, 6)} XUSD` : "..."],
               ].map(([k, v]) => (
                 <div key={k}>
                   <div style={{ fontSize: 10, color: "var(--mid)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>{k}</div>
@@ -228,57 +250,71 @@ export default function BuyProperty({ wallet, tokenId }) {
                 </div>
               ))}
             </div>
+
+            {/* XUSD balance info for buyers */}
+            {!isSeller && wallet.address && xusdBalance !== null && (
+              <div style={{
+                marginTop: 16, padding: "10px 14px",
+                background: "var(--cream)", borderRadius: 2,
+                fontSize: 12, color: "var(--mid)",
+              }}>
+                Your XUSD balance: <strong style={{ color: hasSufficientBalance ? "var(--green)" : "var(--red)" }}>
+                  {ethers.formatUnits(xusdBalance, 6)} XUSD
+                </strong>
+                {!hasSufficientBalance && (
+                  <span style={{ color: "var(--red)", marginLeft: 8 }}>— insufficient balance</span>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}
 
+      {/* Action buttons */}
       {prop && (
         <div style={{ display: "grid", gap: 12 }}>
 
-          {/* Seller: open deal */}
-          {isSeller && prop.status === 0 && (
-            <button onClick={openDeal} disabled={loading} style={{
-              padding: "12px", border: "1px solid var(--charcoal)",
-              background: "transparent", borderRadius: 2,
-              fontSize: 12, letterSpacing: "0.08em", textTransform: "uppercase", cursor: "pointer",
-            }}>Open Escrow Deal</button>
-          )}
-
-          {/* Seller: cancel deal — only if no buyer has deposited yet */}
-          {isSeller && prop.status === 1 && noBuyerYet && (
-            <button onClick={cancelDeal} disabled={loading} style={{
-              padding: "12px", border: "1px solid var(--red)",
-              background: "transparent", borderRadius: 2,
-              fontSize: 12, letterSpacing: "0.08em", textTransform: "uppercase",
-              cursor: "pointer", color: "var(--red)",
-            }}>Cancel Deal</button>
-          )}
-
-          {/* Buyer: deposit */}
-          {!isSeller && prop.status === 1 && noBuyerYet && (
-            <button onClick={deposit} disabled={loading} style={{
+          {/* Buyer flow: approve then buyNow */}
+          {!isSeller && prop.status === 0 && hasSufficientBalance && !hasAllowance && (
+            <button onClick={approveXUSD} disabled={loading} style={{
               padding: "12px", border: "none",
               background: "var(--charcoal)", color: "var(--warm-white)",
-              borderRadius: 2, fontSize: 12, letterSpacing: "0.08em", textTransform: "uppercase", cursor: "pointer",
-            }}>Deposit {prop.price ? ethers.formatEther(prop.price) : "..."} ETH</button>
+              borderRadius: 2, fontSize: 12, letterSpacing: "0.08em",
+              textTransform: "uppercase", cursor: "pointer",
+            }}>
+              Step 1 — Approve {prop.price ? ethers.formatUnits(prop.price, 6) : "..."} XUSD
+            </button>
           )}
 
-          {/* Buyer: sign */}
+          {!isSeller && prop.status === 0 && hasAllowance && (
+            <button onClick={buyNow} disabled={loading} style={{
+              padding: "12px", border: "none",
+              background: "var(--gold)", color: "var(--warm-white)",
+              borderRadius: 2, fontSize: 12, letterSpacing: "0.08em",
+              textTransform: "uppercase", cursor: "pointer",
+            }}>
+              {loading ? "Processing..." : `Buy Now — ${prop.price ? ethers.formatUnits(prop.price, 6) : "..."} XUSD`}
+            </button>
+          )}
+
+          {/* Buyer: sign to finalise */}
           {isBuyer && !deal.buyerSigned && (
             <button onClick={sign} disabled={loading} style={{
               padding: "12px", border: "none",
-              background: "var(--gold)", color: "var(--warm-white)",
-              borderRadius: 2, fontSize: 12, letterSpacing: "0.08em", textTransform: "uppercase", cursor: "pointer",
-            }}>Sign & Finalise Deal</button>
+              background: "var(--charcoal)", color: "var(--warm-white)",
+              borderRadius: 2, fontSize: 12, letterSpacing: "0.08em",
+              textTransform: "uppercase", cursor: "pointer",
+            }}>Sign & Finalise Ownership Transfer</button>
           )}
 
-          {/* Seller: withdraw */}
+          {/* Seller: withdraw XUSD */}
           {isSeller && (
             <button onClick={withdrawFunds} disabled={loading} style={{
               padding: "12px", border: "1px solid var(--border)",
               background: "transparent", borderRadius: 2,
-              fontSize: 12, color: "var(--mid)", letterSpacing: "0.08em", textTransform: "uppercase", cursor: "pointer",
-            }}>Withdraw Pending Funds</button>
+              fontSize: 12, color: "var(--mid)", letterSpacing: "0.08em",
+              textTransform: "uppercase", cursor: "pointer",
+            }}>Withdraw Pending XUSD</button>
           )}
 
         </div>

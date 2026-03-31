@@ -3,8 +3,8 @@ import { ethers } from "ethers";
 import RegistryABI from "../abis/PropertyRegistry.json";
 import EscrowABI from "../abis/PropertyEscrow.json";
 
-const REGISTRY_ADDRESS = "0xC435b05C568aE2Be474C4E68448f9c7c504f3855";
-const ESCROW_ADDRESS   = "0xfc3553E0A744c0B2B0c9953B5cA215689ECB3C60";
+const REGISTRY_ADDRESS = "0x6DCD95DD67c342EbfdF4355ef97f1A1ee9553028";
+const ESCROW_ADDRESS   = "0x701FfaaE7a48C7756B2F6115EDC09A8E0331BCf0";
 const PUBLIC_RPC       = "https://arc-testnet.drpc.org";
 const CHUNK_SIZE       = 9000;
 

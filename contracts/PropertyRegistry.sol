@@ -67,6 +67,15 @@ contract PropertyRegistry is ERC721, Ownable2Step, Pausable {
         emit EscrowContractSet(_escrow);
     }
 
+    // I allow owner to update escrow after initial lock — for contract upgrades
+    function updateEscrowContract(address _escrow) external onlyOwner {
+        require(_escrow != address(0), "Invalid escrow address");
+
+        escrowContract = _escrow;
+        emit EscrowContractSet(_escrow);
+    }
+
+
     // Admin: add or remove verified listers
     function setVerifiedLister(address lister, bool status) external onlyOwner {
         require(lister != address(0), "Invalid address");
