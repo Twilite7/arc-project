@@ -9,6 +9,8 @@ import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 contract PropertyRegistry is ERC721, Ownable2Step, Pausable {
 
+    using ECDSA for bytes32;
+
     enum Status { Available, InEscrow, Sold }
 
     struct Property {
@@ -20,7 +22,6 @@ contract PropertyRegistry is ERC721, Ownable2Step, Pausable {
         string description;
         bytes32 docsHash;
         bytes sellerSig;
-        bytes buyerSig;
         Status status;
         address[] previousOwners;
     }
@@ -31,11 +32,19 @@ contract PropertyRegistry is ERC721, Ownable2Step, Pausable {
     address public escrowContract;
     bool public escrowLocked;
 
+    // I track pending escrow update separately from initial set
+    address public pendingEscrow;
+    uint256 public pendingEscrowValidAfter;
+    uint256 public constant ESCROW_UPDATE_DELAY = 48 hours;
+
     event PropertyListed(uint256 indexed tokenId, address indexed seller, string location);
     event StatusUpdated(uint256 indexed tokenId, Status status);
     event PropertyTransferred(uint256 indexed tokenId, address indexed from, address indexed to);
     event VerifiedListerUpdated(address indexed lister, bool status);
     event EscrowContractSet(address indexed escrow);
+    // I emit a distinct event for updates so they're distinguishable from initial set
+    event EscrowUpdateProposed(address indexed proposed, uint256 validAfter);
+    event EscrowContractUpdated(address indexed oldEscrow, address indexed newEscrow);
 
     modifier onlyVerifiedLister() {
         require(verifiedListers[msg.sender], "Not a verified lister");
@@ -54,11 +63,12 @@ contract PropertyRegistry is ERC721, Ownable2Step, Pausable {
 
     constructor() ERC721("PropertyRegistry", "PROP") Ownable(msg.sender) {}
 
-    // Admin: pause/unpause
+    // ─── Admin ────────────────────────────────────────────────────
+
     function pause() external onlyOwner { _pause(); }
     function unpause() external onlyOwner { _unpause(); }
 
-    // Admin: set escrow contract — locked after first set
+    // I lock escrow after first set — use proposeEscrowUpdate for upgrades
     function setEscrowContract(address _escrow) external onlyOwner {
         require(!escrowLocked, "Escrow already set");
         require(_escrow != address(0), "Invalid escrow address");
@@ -67,23 +77,42 @@ contract PropertyRegistry is ERC721, Ownable2Step, Pausable {
         emit EscrowContractSet(_escrow);
     }
 
-    // I allow owner to update escrow after initial lock — for contract upgrades
-    function updateEscrowContract(address _escrow) external onlyOwner {
+    // I enforce a 48-hour timelock on escrow updates to prevent instant hijack
+    // Step 1: owner proposes new escrow
+    function proposeEscrowUpdate(address _escrow) external onlyOwner {
         require(_escrow != address(0), "Invalid escrow address");
-
-        escrowContract = _escrow;
-        emit EscrowContractSet(_escrow);
+        require(_escrow != escrowContract, "Same as current escrow");
+        pendingEscrow = _escrow;
+        pendingEscrowValidAfter = block.timestamp + ESCROW_UPDATE_DELAY;
+        emit EscrowUpdateProposed(_escrow, pendingEscrowValidAfter);
     }
 
+    // Step 2: owner executes after delay has passed
+    function executeEscrowUpdate() external onlyOwner {
+        require(pendingEscrow != address(0), "No pending escrow update");
+        require(block.timestamp >= pendingEscrowValidAfter, "Timelock not expired");
+        address old = escrowContract;
+        escrowContract = pendingEscrow;
+        pendingEscrow = address(0);
+        pendingEscrowValidAfter = 0;
+        emit EscrowContractUpdated(old, escrowContract);
+    }
 
-    // Admin: add or remove verified listers
+    // I allow owner to cancel a pending escrow update
+    function cancelEscrowUpdate() external onlyOwner {
+        require(pendingEscrow != address(0), "No pending escrow update");
+        pendingEscrow = address(0);
+        pendingEscrowValidAfter = 0;
+    }
+
     function setVerifiedLister(address lister, bool status) external onlyOwner {
         require(lister != address(0), "Invalid address");
         verifiedListers[lister] = status;
         emit VerifiedListerUpdated(lister, status);
     }
 
-    // List a new property — mints a token
+    // ─── List property ────────────────────────────────────────────
+
     function listProperty(
         string memory location,
         string memory latitude,
@@ -94,13 +123,19 @@ contract PropertyRegistry is ERC721, Ownable2Step, Pausable {
         bytes32 docsHash,
         bytes memory sellerSig
     ) external onlyVerifiedLister whenNotPaused returns (uint256) {
+
+        // CHECKS
         require(price > 0, "Price must be greater than zero");
-        require(bytes(location).length > 0, "Location required");
-        require(bytes(latitude).length > 0, "Latitude required");
-        require(bytes(longitude).length > 0, "Longitude required");
+        // I cap price at 1 million XUSD to prevent griefing with absurd listings
+        require(price <= 1_000_000 * 10**6, "Price exceeds maximum of 1M XUSD");
+        require(bytes(location).length > 0 && bytes(location).length <= 200, "Invalid location length");
+        require(bytes(latitude).length > 0 && bytes(latitude).length <= 20, "Invalid latitude length");
+        require(bytes(longitude).length > 0 && bytes(longitude).length <= 20, "Invalid longitude length");
+        require(bytes(size).length > 0 && bytes(size).length <= 50, "Invalid size length");
+        require(bytes(description).length <= 1000, "Description too long");
         require(docsHash != bytes32(0), "Docs hash required");
 
-        // Verify seller signature on-chain
+        // I verify seller signed the exact listing parameters on-chain
         bytes32 messageHash = keccak256(abi.encodePacked(
             location, latitude, longitude, size, price, docsHash
         ));
@@ -108,75 +143,70 @@ contract PropertyRegistry is ERC721, Ownable2Step, Pausable {
         address recovered = ECDSA.recover(ethHash, sellerSig);
         require(recovered == msg.sender, "Invalid seller signature");
 
+        // EFFECTS
         tokenCount++;
         uint256 tokenId = tokenCount;
 
-        // Assign fields individually — avoids dynamic array struct issues
-        properties[tokenId].location = location;
-        properties[tokenId].latitude = latitude;
-        properties[tokenId].longitude = longitude;
-        properties[tokenId].size = size;
-        properties[tokenId].price = price;
+        properties[tokenId].location    = location;
+        properties[tokenId].latitude    = latitude;
+        properties[tokenId].longitude   = longitude;
+        properties[tokenId].size        = size;
+        properties[tokenId].price       = price;
         properties[tokenId].description = description;
-        properties[tokenId].docsHash = docsHash;
-        properties[tokenId].sellerSig = sellerSig;
-        properties[tokenId].status = Status.Available;
+        properties[tokenId].docsHash    = docsHash;
+        properties[tokenId].sellerSig   = sellerSig;
+        properties[tokenId].status      = Status.Available;
 
+        // INTERACTIONS
         _safeMint(msg.sender, tokenId);
         emit PropertyListed(tokenId, msg.sender, location);
 
         return tokenId;
     }
 
-    // Block ALL direct ERC-721 transfers — must go through escrow
+    // ─── Transfer guard ───────────────────────────────────────────
+
+    // I block all direct ERC-721 transfers — must go through escrow
+    // I use _msgSender() for meta-transaction compatibility
     function _update(address to, uint256 tokenId, address auth)
         internal override returns (address) {
         address from = _ownerOf(tokenId);
-        // Allow minting (from == 0) but block all transfers not from escrow
-        if (from != address(0) && msg.sender != escrowContract) {
+        if (from != address(0) && _msgSender() != escrowContract) {
             revert("Use escrow to transfer property");
         }
         return super._update(to, tokenId, auth);
     }
 
-    // Called by escrow when buyer signs
-    function attachBuyerSig(uint256 tokenId, bytes memory buyerSig)
-        external onlyEscrow tokenExists(tokenId) {
-        require(buyerSig.length > 0, "Invalid buyer signature");
-        properties[tokenId].buyerSig = buyerSig;
-    }
+    // ─── Escrow-only functions ────────────────────────────────────
 
-    // Called by escrow to update property status
     function updateStatus(uint256 tokenId, Status newStatus)
         external onlyEscrow tokenExists(tokenId) {
         properties[tokenId].status = newStatus;
         emit StatusUpdated(tokenId, newStatus);
     }
 
-    // Called by escrow to finalize ownership transfer
     function transferProperty(uint256 tokenId, address from, address to)
         external onlyEscrow tokenExists(tokenId) {
         require(from != address(0) && to != address(0), "Invalid addresses");
-        require(ownerOf(tokenId) == from, "From is not owner");
+        require(ownerOf(tokenId) == from, "From is not current owner");
         properties[tokenId].previousOwners.push(from);
         properties[tokenId].status = Status.Sold;
         _transfer(from, to, tokenId);
         emit PropertyTransferred(tokenId, from, to);
     }
 
-    // Read full property
+    // ─── Read functions ───────────────────────────────────────────
+
     function getProperty(uint256 tokenId)
         external view tokenExists(tokenId) returns (Property memory) {
         return properties[tokenId];
     }
 
-    // Read ownership history
     function getPreviousOwners(uint256 tokenId)
         external view tokenExists(tokenId) returns (address[] memory) {
         return properties[tokenId].previousOwners;
     }
 
-    // Expose escrowContract for verification
     function getEscrowContract() external view returns (address) {
         return escrowContract;
     }

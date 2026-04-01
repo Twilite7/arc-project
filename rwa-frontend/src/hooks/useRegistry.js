@@ -3,15 +3,15 @@ import { ethers } from "ethers";
 import RegistryABI from "../abis/PropertyRegistry.json";
 import EscrowABI from "../abis/PropertyEscrow.json";
 
-const REGISTRY_ADDRESS = "0x6DCD95DD67c342EbfdF4355ef97f1A1ee9553028";
-const ESCROW_ADDRESS   = "0x701FfaaE7a48C7756B2F6115EDC09A8E0331BCf0";
+const REGISTRY_ADDRESS = "0x14A435A1923Ef70d53BAD2AFa2d010ec8dAF5436";
+const ESCROW_ADDRESS   = "0xd1b862ebE8280fB07822677c480A65bC7B1EeA6D";
 const PUBLIC_RPC       = "https://arc-testnet.drpc.org";
 const CHUNK_SIZE       = 9000;
 
 // I set this to just before the first PropertyListed event
 // Current block is ~34632409, contract deployed well before that
 // Start from block 34500000 to cover all listings without hitting rate limits
-const DEPLOY_BLOCK     = 34500000;
+const DEPLOY_BLOCK     = 34900000;
 
 export function useRegistry(signer, provider) {
   const [properties, setProperties] = useState([]);
@@ -48,7 +48,7 @@ export function useRegistry(signer, provider) {
         }
       }
 
-      console.log(`Found ${allEvents.length} PropertyListed events`);
+      if (import.meta.env.DEV) console.log(`Found ${allEvents.length} PropertyListed events`);
 
       const props = await Promise.all(allEvents.map(async (e) => {
         const tokenId = e.args[0];

@@ -19,7 +19,6 @@ interface IPropertyRegistry {
         string description;
         bytes32 docsHash;
         bytes sellerSig;
-        bytes buyerSig;
         Status status;
         address[] previousOwners;
     }
@@ -49,14 +48,14 @@ contract PropertyEscrow is Ownable2Step, ReentrancyGuard, Pausable {
     uint256 public dealCount;
 
     // I track escrowed XUSD internally — never rely on token.balanceOf(this)
-    // Protects against direct token transfers bypassing accounting
+    // Protects against accounting manipulation via direct token transfers
     uint256 public totalEscrowedFunds;
 
     mapping(uint256 => Deal) public deals;
     mapping(uint256 => uint256) public tokenToDeal;
     mapping(uint256 => bool) public activeDeal;
 
-    // I use pull payment pattern — recipients withdraw their own funds
+    // I use pull payment pattern — no direct pushes, recipients withdraw themselves
     mapping(address => uint256) public pendingWithdrawals;
 
     IPropertyRegistry public immutable registry;
@@ -77,11 +76,6 @@ contract PropertyEscrow is Ownable2Step, ReentrancyGuard, Pausable {
 
     modifier dealExists(uint256 dealId) {
         require(dealId > 0 && dealId <= dealCount, "Deal does not exist");
-        _;
-    }
-
-    modifier onlyDealSeller(uint256 dealId) {
-        require(deals[dealId].seller == msg.sender, "Not the seller");
         _;
     }
 
@@ -121,8 +115,8 @@ contract PropertyEscrow is Ownable2Step, ReentrancyGuard, Pausable {
     }
 
     // ─── Step 1: Buyer initiates purchase ─────────────────────────
-    // I pull XUSD from buyer via transferFrom — buyer must approve first
-    // Deal opens and funds are escrowed atomically in one transaction
+    // I pull XUSD atomically — buyer must approve exact amount first
+    // No seller action needed — they list and wait
     function buyNow(uint256 tokenId)
         external whenNotPaused nonReentrant returns (uint256) {
 
@@ -142,13 +136,20 @@ contract PropertyEscrow is Ownable2Step, ReentrancyGuard, Pausable {
 
         uint256 price = prop.price;
 
-        // I verify buyer has approved enough XUSD before any state changes
+        // I check allowance before any state changes
         require(
             paymentToken.allowance(msg.sender, address(this)) >= price,
             "Insufficient XUSD allowance, approve first"
         );
 
-        // EFFECTS — all state changes before external token transfer
+        // I also verify seller still owns the token before opening a deal
+        // Prevents race condition between listing and buying
+        require(
+            registry.ownerOf(tokenId) == seller,
+            "Ownership changed, cannot open deal"
+        );
+
+        // EFFECTS — all state before external calls
         dealCount++;
         uint256 dealId = dealCount;
 
@@ -165,7 +166,7 @@ contract PropertyEscrow is Ownable2Step, ReentrancyGuard, Pausable {
         activeDeal[tokenId] = true;
         totalEscrowedFunds += price;
 
-        // INTERACTIONS — token transfer and registry update last
+        // INTERACTIONS — external calls strictly last
         paymentToken.safeTransferFrom(msg.sender, address(this), price);
         registry.updateStatus(tokenId, IPropertyRegistry.Status.InEscrow);
 
@@ -174,8 +175,8 @@ contract PropertyEscrow is Ownable2Step, ReentrancyGuard, Pausable {
     }
 
     // ─── Step 2: Platform releases deal after off-chain verification ──
-    // I only allow the platform owner to release — this is the trust anchor
-    // Admin verifies legal docs, title deed, and KYC before calling this
+    // I verify seller still owns token before transferring
+    // Admin confirms legal docs, title deed, KYC before calling this
     function releaseDeal(uint256 dealId)
         external dealExists(dealId) onlyOwner nonReentrant whenNotPaused {
 
@@ -184,6 +185,13 @@ contract PropertyEscrow is Ownable2Step, ReentrancyGuard, Pausable {
         // CHECKS
         require(deal.status == DealStatus.Open, "Deal not open");
         require(block.timestamp <= deal.createdAt + dealExpiry, "Deal expired");
+
+        // I verify seller still owns the token before the transfer
+        // Protects against edge cases where ownership changed after deal opened
+        require(
+            registry.ownerOf(deal.tokenId) == deal.seller,
+            "Seller no longer owns token"
+        );
 
         // EFFECTS — all state before external calls
         deal.status = DealStatus.Completed;
@@ -209,9 +217,8 @@ contract PropertyEscrow is Ownable2Step, ReentrancyGuard, Pausable {
         emit FundsQueued(dealId, deal.seller, sellerAmount);
     }
 
-    // ─── Platform rejects deal — refunds buyer ────────────────────
-    // I call this if off-chain verification fails (bad title, fraud, etc.)
-    // Buyer gets full refund, property returns to Available
+    // ─── Platform rejects deal — refunds buyer in full ────────────
+    // I call this if off-chain verification fails
     function rejectDeal(uint256 dealId, string calldata reason)
         external dealExists(dealId) onlyOwner nonReentrant whenNotPaused {
 
@@ -219,6 +226,7 @@ contract PropertyEscrow is Ownable2Step, ReentrancyGuard, Pausable {
 
         // CHECKS
         require(deal.status == DealStatus.Open, "Deal not open");
+        require(bytes(reason).length > 0, "Reason required");
 
         // EFFECTS
         deal.status = DealStatus.Cancelled;
@@ -229,7 +237,6 @@ contract PropertyEscrow is Ownable2Step, ReentrancyGuard, Pausable {
 
         if (refundAmount > 0) {
             totalEscrowedFunds -= refundAmount;
-            // I queue refund via pull — buyer calls withdrawFunds()
             pendingWithdrawals[deal.buyer] += refundAmount;
         }
 
@@ -254,10 +261,11 @@ contract PropertyEscrow is Ownable2Step, ReentrancyGuard, Pausable {
     }
 
     // ─── Expire deal ──────────────────────────────────────────────
-    // I allow either party to trigger expiry after the deadline
-    // Protects buyer if admin never acts — full refund via pull payment
+    // I protect buyer if admin never acts — full refund after expiry
+    // whenNotPaused prevents fund movement during emergency pause
     function expireDeal(uint256 dealId)
-        external dealExists(dealId) nonReentrant {
+        external dealExists(dealId) nonReentrant whenNotPaused {
+
         Deal storage deal = deals[dealId];
 
         // CHECKS
@@ -292,9 +300,11 @@ contract PropertyEscrow is Ownable2Step, ReentrancyGuard, Pausable {
         return deals[dealId];
     }
 
+    // I return deal data without reverting — caller checks dealId validity
     function getDealByToken(uint256 tokenId)
         external view returns (Deal memory) {
         uint256 dealId = tokenToDeal[tokenId];
+        // I use a clear require so callers can distinguish no-deal from RPC errors
         require(dealId != 0, "No deal found for this token");
         return deals[dealId];
     }

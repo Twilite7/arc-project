@@ -4,10 +4,11 @@ import StatusBadge from "../components/StatusBadge.jsx";
 import RegistryABI from "../abis/PropertyRegistry.json";
 import EscrowABI from "../abis/PropertyEscrow.json";
 
-const REGISTRY_ADDRESS = "0x79621c104794dD742e5E20f935bDdB1616F2E010";
-const ESCROW_ADDRESS   = "0x412B9F64631588bE1ed50bc7919b23ac6e8618a2";
+const REGISTRY_ADDRESS = "0x14A435A1923Ef70d53BAD2AFa2d010ec8dAF5436";
+const ESCROW_ADDRESS   = "0xd1b862ebE8280fB07822677c480A65bC7B1EeA6D";
 const XUSD_ADDRESS     = "0x7b7821a895fE26bF3C6A8293D4b984f10A7E38b5";
 const GATEWAY          = "https://gateway.pinata.cloud/ipfs";
+const ARC_CHAIN_ID     = 5042002;
 
 const ERC20_ABI = [
   "function approve(address spender, uint256 amount) returns (bool)",
@@ -32,6 +33,15 @@ function getEscrow(p)   { return new ethers.Contract(ESCROW_ADDRESS, EscrowABI.a
 function getXUSD(p)     { return new ethers.Contract(XUSD_ADDRESS, ERC20_ABI, p); }
 
 export default function BuyProperty({ wallet, tokenId }) {
+  // I verify the user is on Arc Testnet before any transaction
+  async function checkNetwork() {
+    const net = await wallet.provider.getNetwork();
+    if (Number(net.chainId) !== ARC_CHAIN_ID) {
+      setStatus("Error: Wrong network. Please switch MetaMask to Arc Testnet.");
+      return false;
+    }
+    return true;
+  }
   const [prop, setProp]             = useState(null);
   const [deal, setDeal]             = useState(null);
   const [xusdBalance, setBalance]   = useState(null);
@@ -92,6 +102,7 @@ export default function BuyProperty({ wallet, tokenId }) {
   // ── Step 1: Approve XUSD ──────────────────────────────────────
   async function approveXUSD() {
     if (!wallet.signer || !prop) return;
+    if (!await checkNetwork()) return;
     setLoading(true); setStatus("Approving XUSD in MetaMask...");
     try {
       const tx = await getXUSD(wallet.signer).approve(ESCROW_ADDRESS, prop.price);
@@ -105,6 +116,7 @@ export default function BuyProperty({ wallet, tokenId }) {
   // ── Step 2: Buy Now — locks XUSD in escrow ────────────────────
   async function buyNow() {
     if (!wallet.signer || !prop) return;
+    if (!await checkNetwork()) return;
     setLoading(true); setStatus("Submitting purchase in MetaMask...");
     try {
       const tx = await getEscrow(wallet.signer).buyNow(prop.tokenId);
@@ -119,6 +131,7 @@ export default function BuyProperty({ wallet, tokenId }) {
   // ── Seller: withdraw XUSD after deal is released ──────────────
   async function withdrawFunds() {
     if (!wallet.signer) return;
+    if (!await checkNetwork()) return;
     setLoading(true); setStatus("Checking pending balance...");
     try {
       const escrow  = getEscrow(wallet.signer);
@@ -132,6 +145,18 @@ export default function BuyProperty({ wallet, tokenId }) {
   }
 
   // I check deal.seller after transfer since prop.owner changes to buyer on release
+  // I allow buyer to revoke stale allowance if a deal fails before buyNow
+  async function revokeAllowance() {
+    setLoading(true); setStatus("Revoking XUSD approval...");
+    try {
+      const tx = await getXUSD(wallet.signer).approve(ESCROW_ADDRESS, 0n);
+      await tx.wait();
+      setStatus("Allowance revoked.");
+      await loadProperty(prop.tokenId.toString());
+    } catch (e) { setStatus("Error: " + (e.reason || e.message)); }
+    setLoading(false);
+  }
+
   const isSeller = prop && wallet.address &&
     (deal ? deal.seller : prop.owner).toLowerCase() === wallet.address.toLowerCase();
 
@@ -253,6 +278,16 @@ export default function BuyProperty({ wallet, tokenId }) {
             }}>
               Step 1 — Approve {prop.price ? ethers.formatUnits(prop.price, 6) : "..."} XUSD
             </button>
+          )}
+
+          {/* Buyer: revoke stale allowance if deal failed before buyNow */}
+          {!isSeller && prop.status === 0 && hasAllowance && !loading && (
+            <button onClick={revokeAllowance} disabled={loading} style={{
+              padding: "10px", border: "1px solid rgba(139,44,44,0.3)",
+              background: "rgba(139,44,44,0.06)", color: "var(--red)",
+              borderRadius: 2, fontSize: 11, letterSpacing: "0.08em",
+              textTransform: "uppercase", cursor: "pointer",
+            }}>Revoke Approval</button>
           )}
 
           {/* Buyer: buy now */}
