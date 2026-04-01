@@ -68,8 +68,7 @@ export default function BuyProperty({ wallet, tokenId }) {
         docsHash:    p.docsHash,
       });
 
-      const hasActive = await escrow.hasActiveDeal(tid);
-      setDeal(hasActive ? await escrow.getDealByToken(tid) : null);
+      try { setDeal(await escrow.getDealByToken(tid)); } catch { setDeal(null); }
 
       if (wallet.address) {
         const xusd = getXUSD(provider);
