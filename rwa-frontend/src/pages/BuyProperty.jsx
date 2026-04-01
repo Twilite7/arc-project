@@ -132,8 +132,9 @@ export default function BuyProperty({ wallet, tokenId }) {
     setLoading(false);
   }
 
+  // I check deal.seller after transfer since prop.owner changes to buyer on release
   const isSeller = prop && wallet.address &&
-    prop.owner.toLowerCase() === wallet.address.toLowerCase();
+    (deal ? deal.seller : prop.owner).toLowerCase() === wallet.address.toLowerCase();
 
   const hasAllowance = xusdAllowance !== null && prop !== null &&
     xusdAllowance >= prop.price;
