@@ -47,6 +47,7 @@ export default function BuyProperty({ wallet, tokenId }) {
   const [status, setStatus]         = useState("");
   const [loading, setLoading]       = useState(false);
   const [rejectionReason, setRejectionReason] = useState("");
+  const [pendingWithdrawal, setPendingWithdrawal] = useState(null);
   const [inputId, setInputId]       = useState(tokenId || "");
 
   async function loadProperty(id) {
@@ -100,13 +101,16 @@ export default function BuyProperty({ wallet, tokenId }) {
       } catch { setDeal(null); setRejectionReason(""); }
 
       if (wallet.address) {
-        const xusd = getXUSD(provider, net.xusd);
-        const [bal, allow] = await Promise.all([
+        const xusd   = getXUSD(provider, net.xusd);
+        const escrowR = getEscrow(provider, net.escrow);
+        const [bal, allow, pending] = await Promise.all([
           xusd.balanceOf(wallet.address),
           xusd.allowance(wallet.address, net.escrow),
+          escrowR.getPendingWithdrawal(wallet.address),
         ]);
         setBalance(bal);
         setAllowance(allow);
+        setPendingWithdrawal(pending);
       }
     } catch (e) {
       setStatus("Property not found: " + (e.reason || e.message));
@@ -334,14 +338,21 @@ export default function BuyProperty({ wallet, tokenId }) {
             </button>
           )}
 
-          {/* Seller: withdraw after release */}
-          {isSeller && (
+          {/* Seller or buyer: withdraw pending XUSD after release or refund */}
+          {(isSeller || (pendingWithdrawal !== null && pendingWithdrawal > 0n)) && (
             <button onClick={withdrawFunds} disabled={loading} style={{
               padding: "12px", border: "1px solid var(--border)",
               background: "transparent", borderRadius: 2,
               fontSize: 12, color: "var(--mid)", letterSpacing: "0.08em",
               textTransform: "uppercase", cursor: "pointer",
-            }}>Withdraw Pending XUSD</button>
+            }}>
+              Withdraw Pending XUSD
+              {pendingWithdrawal !== null && pendingWithdrawal > 0n && (
+                <span style={{ marginLeft: 6, color: "var(--green)" }}>
+                  ({ethers.formatUnits(pendingWithdrawal, 6)} XUSD)
+                </span>
+              )}
+            </button>
           )}
 
         </div>
