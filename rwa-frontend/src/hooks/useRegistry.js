@@ -19,21 +19,26 @@ export function useRegistry(signer, provider, chainId) {
   const [loading, setLoading]       = useState(false);
 
   // I derive network config from chainId — falls back to Arc if not connected
-  const netConfig = getNetwork(chainId) || getNetwork(5042002);
+  // I only fetch when chainId is known — no silent fallback to Arc
+  const netConfig = getNetwork(chainId);
 
   const getProvider = useCallback(() => {
     return provider || getPublicProvider(chainId || 5042002);
   }, [provider, chainId]);
 
-  const getRegistry = useCallback((signerOrProvider) =>
-    new ethers.Contract(netConfig.registry, RegistryABI.abi, signerOrProvider),
-  [netConfig.registry]);
 
-  const getEscrow = useCallback((signerOrProvider) =>
-    new ethers.Contract(netConfig.escrow, EscrowABI.abi, signerOrProvider),
-  [netConfig.escrow]);
+  const getRegistry = useCallback((signerOrProvider) => {
+    if (!netConfig) return null;
+    return new ethers.Contract(netConfig.registry, RegistryABI.abi, signerOrProvider);
+  }, [netConfig?.registry]);
+
+  const getEscrow = useCallback((signerOrProvider) => {
+    if (!netConfig) return null;
+    return new ethers.Contract(netConfig.escrow, EscrowABI.abi, signerOrProvider);
+  }, [netConfig?.escrow]);
 
   const fetchProperties = useCallback(async () => {
+    if (!netConfig) { setProperties([]); return; }
     setLoading(true);
     try {
       const p        = getProvider();
@@ -84,7 +89,7 @@ export function useRegistry(signer, provider, chainId) {
   return {
     properties, loading, fetchProperties,
     getRegistry, getEscrow,
-    REGISTRY_ADDRESS: netConfig.registry,
-    ESCROW_ADDRESS:   netConfig.escrow,
+    REGISTRY_ADDRESS: netConfig?.registry,
+    ESCROW_ADDRESS:   netConfig?.escrow,
   };
 }
