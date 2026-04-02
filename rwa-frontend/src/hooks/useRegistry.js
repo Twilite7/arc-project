@@ -82,7 +82,7 @@ export function useRegistry(signer, provider, chainId) {
       setProperties(props);
     } catch (e) { console.error("fetchProperties error:", e); }
     setLoading(false);
-  }, [getProvider, getRegistry, netConfig.deployBlock]);
+  }, [getProvider, getRegistry, netConfig?.deployBlock]);
 
   useEffect(() => { fetchProperties(); }, [fetchProperties]);
 

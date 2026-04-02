@@ -94,7 +94,7 @@ export default function BuyProperty({ wallet, tokenId }) {
             });
             if (logs.length > 0) {
               const parsed = escrow.interface.parseLog(logs[0]);
-              setRejectionReason(parsed.args[1] || "No reason provided");
+              setRejectionReason(parsed.args[0] || "No reason provided");
             }
           } catch { setRejectionReason("Deal was rejected by platform."); }
         } else {
