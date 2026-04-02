@@ -5,7 +5,7 @@ import EscrowABI from "../abis/PropertyEscrow.json";
 import { getNetwork } from "../config/networks.js";
 
 const ARC_PUBLIC_RPC     = "https://arc-testnet.drpc.org";
-const ROBINHOOD_PUBLIC_RPC = "https://rpc.testnet.chain.robinhood.com";
+const ROBINHOOD_PUBLIC_RPC = "https://robinhood-testnet.g.alchemy.com/v2/G3Xv9S7-fqFCrwMTQ2h7E";
 const CHUNK_SIZE         = 9000;
 
 // I return a public RPC provider for the given chainId — used when wallet not connected

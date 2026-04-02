@@ -46,6 +46,7 @@ export default function BuyProperty({ wallet, tokenId }) {
   const [xusdAllowance, setAllowance] = useState(null);
   const [status, setStatus]         = useState("");
   const [loading, setLoading]       = useState(false);
+  const [rejectionReason, setRejectionReason] = useState("");
   const [inputId, setInputId]       = useState(tokenId || "");
 
   async function loadProperty(id) {
@@ -76,7 +77,29 @@ export default function BuyProperty({ wallet, tokenId }) {
         docsHash:    p.docsHash,
       });
 
-      try { setDeal(await escrow.getDealByToken(tid)); } catch { setDeal(null); }
+      try {
+        const d = await escrow.getDealByToken(tid);
+        setDeal(d);
+        // I fetch rejection reason from event log if deal was cancelled
+        if (Number(d.status) === 2) {
+          try {
+            const dealId = await escrow.tokenToDeal(tid);
+            const filter = escrow.filters.DealRejected(dealId);
+            const logs = await provider.getLogs({
+              address: net.escrow,
+              topics: filter.topics,
+              fromBlock: 0,
+              toBlock: "latest",
+            });
+            if (logs.length > 0) {
+              const parsed = escrow.interface.parseLog(logs[0]);
+              setRejectionReason(parsed.args[1] || "No reason provided");
+            }
+          } catch { setRejectionReason("Deal was rejected by platform."); }
+        } else {
+          setRejectionReason("");
+        }
+      } catch { setDeal(null); setRejectionReason(""); }
 
       if (wallet.address) {
         const xusd = getXUSD(provider, net.xusd);
@@ -244,6 +267,19 @@ export default function BuyProperty({ wallet, tokenId }) {
                 {!hasSufficientBalance && (
                   <span style={{ color: "var(--red)", marginLeft: 8 }}>— insufficient</span>
                 )}
+              </div>
+            )}
+
+            {/* Rejection notice */}
+            {deal && Number(deal.status) === 2 && (
+              <div style={{
+                marginTop: 16, padding: "10px 14px",
+                background: "rgba(139,44,44,0.06)",
+                border: "1px solid rgba(139,44,44,0.3)",
+                borderRadius: 2, fontSize: 12, color: "var(--red)",
+              }}>
+                <strong>Deal Rejected</strong>
+                {rejectionReason && <span> — {rejectionReason}</span>}
               </div>
             )}
 
