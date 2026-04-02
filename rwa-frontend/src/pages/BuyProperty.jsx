@@ -55,6 +55,7 @@ export default function BuyProperty({ wallet, tokenId }) {
     try {
       const provider = wallet.provider;
       if (!provider) { setStatus("Connect your wallet first."); return; }
+      if (!net) { setStatus("Unsupported network. Switch to Arc or Robinhood Testnet."); return; }
 
       const registry = getRegistry(provider, net.registry);
       const escrow   = getEscrow(provider, net.escrow);
