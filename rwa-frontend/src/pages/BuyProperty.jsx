@@ -81,22 +81,19 @@ export default function BuyProperty({ wallet, tokenId }) {
       try {
         const d = await escrow.getDealByToken(tid);
         setDeal(d);
-        // I fetch rejection reason from event log if deal was cancelled
+        // I fetch rejection reason using queryFilter which handles ABI decoding correctly
         if (Number(d.status) === 2) {
           try {
             const dealId = await escrow.tokenToDeal(tid);
-            const filter = escrow.filters.DealRejected(dealId);
-            const logs = await provider.getLogs({
-              address: net.escrow,
-              topics: filter.topics,
-              fromBlock: 0,
-              toBlock: "latest",
-            });
-            if (logs.length > 0) {
-              const parsed = escrow.interface.parseLog(logs[0]);
-              setRejectionReason(parsed.args[0] || "No reason provided");
+            const events = await escrow.queryFilter(
+              escrow.filters.DealRejected(dealId)
+            );
+            if (events.length > 0) {
+              setRejectionReason(events[0].args.reason || "No reason provided");
+            } else {
+              setRejectionReason("Deal was cancelled.");
             }
-          } catch { setRejectionReason("Deal was rejected by platform."); }
+          } catch { setRejectionReason("Deal was cancelled."); }
         } else {
           setRejectionReason("");
         }
