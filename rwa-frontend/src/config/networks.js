@@ -9,8 +9,8 @@ export const NETWORKS = {
   },
   46630: {
     name: "Robinhood Testnet",
-    registry: "0x5913212dC860470F3267A1D8E0183b41e0d27348",
-    escrow:   "0x7d87308fe28309d2a0735FaEee51723729Ad941A",
+    registry: "0x4e20E35Cf505faFA36E21F3a9490e0A679DaFD89",
+    escrow:   "0x1935A725A549d99aF460c7228f4444b59cfcC52e",
     xusd:     "0xF3632dA3ed3F24E8eF7ef95F9094c323C6457A2b",
     deployBlock: 0,
   },

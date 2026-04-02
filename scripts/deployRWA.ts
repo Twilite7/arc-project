@@ -1,7 +1,11 @@
 import { network } from "hardhat";
 
-// I deploy registry first, then escrow with registry address, then wire them together
-const XUSD_ADDRESS     = "0x7b7821a895fE26bF3C6A8293D4b984f10A7E38b5";
+// I key XUSD addresses by chain ID — never hardcode a single network address
+const XUSD: Record<number, string> = {
+  5042002: "0x7b7821a895fE26bF3C6A8293D4b984f10A7E38b5",  // Arc Testnet
+  46630:   "0xF3632dA3ed3F24E8eF7ef95F9094c323C6457A2b",  // Robinhood Testnet
+};
+
 const PLATFORM_FEE_BPS = 100;   // 1%
 const FEE_RECIPIENT    = "0x13E569C96c7F884443d0c3Ac5019D020dE32bFb3";
 
@@ -9,7 +13,14 @@ async function main() {
   const connection = await network.connect();
   const ethers = connection.ethers;
   const [deployer] = await ethers.getSigners();
+
+  const { chainId } = await ethers.provider.getNetwork();
+  const xusdAddress = XUSD[Number(chainId)];
+  if (!xusdAddress) throw new Error(`No XUSD configured for chain ${chainId}`);
+
   console.log("Deploying with:", deployer.address);
+  console.log("Chain ID:      ", Number(chainId));
+  console.log("XUSD:          ", xusdAddress);
 
   // 1 — Deploy registry
   const RegistryFactory = await ethers.getContractFactory("PropertyRegistry", deployer);
@@ -18,11 +29,11 @@ async function main() {
   const registryAddress = await registry.getAddress();
   console.log("PropertyRegistry:", registryAddress);
 
-  // 2 — Deploy escrow, passing registry + XUSD
+  // 2 — Deploy escrow with correct XUSD for this network
   const EscrowFactory = await ethers.getContractFactory("PropertyEscrow", deployer);
   const escrow = await EscrowFactory.deploy(
     registryAddress,
-    XUSD_ADDRESS,
+    xusdAddress,
     PLATFORM_FEE_BPS,
     FEE_RECIPIENT
   );
