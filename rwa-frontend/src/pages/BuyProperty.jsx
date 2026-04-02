@@ -4,11 +4,7 @@ import StatusBadge from "../components/StatusBadge.jsx";
 import RegistryABI from "../abis/PropertyRegistry.json";
 import EscrowABI from "../abis/PropertyEscrow.json";
 
-const REGISTRY_ADDRESS = "0x14A435A1923Ef70d53BAD2AFa2d010ec8dAF5436";
-const ESCROW_ADDRESS   = "0xd1b862ebE8280fB07822677c480A65bC7B1EeA6D";
-const XUSD_ADDRESS     = "0x7b7821a895fE26bF3C6A8293D4b984f10A7E38b5";
-const GATEWAY          = "https://gateway.pinata.cloud/ipfs";
-const ARC_CHAIN_ID     = 5042002;
+const GATEWAY = "https://gateway.pinata.cloud/ipfs";
 
 const ERC20_ABI = [
   "function approve(address spender, uint256 amount) returns (bool)",
@@ -28,16 +24,18 @@ function parseDescription(raw) {
   }
 }
 
-function getRegistry(p) { return new ethers.Contract(REGISTRY_ADDRESS, RegistryABI.abi, p); }
-function getEscrow(p)   { return new ethers.Contract(ESCROW_ADDRESS, EscrowABI.abi, p); }
-function getXUSD(p)     { return new ethers.Contract(XUSD_ADDRESS, ERC20_ABI, p); }
+function getRegistry(p, addr) { return new ethers.Contract(addr, RegistryABI.abi, p); }
+function getEscrow(p, addr)   { return new ethers.Contract(addr, EscrowABI.abi, p); }
+function getXUSD(p, addr)     { return new ethers.Contract(addr, ERC20_ABI, p); }
 
 export default function BuyProperty({ wallet, tokenId }) {
   // I verify the user is on Arc Testnet before any transaction
+  // I derive network config from the connected wallet
+  const net = wallet.network;
+
   async function checkNetwork() {
-    const net = await wallet.provider.getNetwork();
-    if (Number(net.chainId) !== ARC_CHAIN_ID) {
-      setStatus("Error: Wrong network. Please switch MetaMask to Arc Testnet.");
+    if (!net) {
+      setStatus("Error: Unsupported network. Switch to Arc or Robinhood Testnet.");
       return false;
     }
     return true;
@@ -57,8 +55,8 @@ export default function BuyProperty({ wallet, tokenId }) {
       const provider = wallet.provider;
       if (!provider) { setStatus("Connect your wallet first."); return; }
 
-      const registry = getRegistry(provider);
-      const escrow   = getEscrow(provider);
+      const registry = getRegistry(provider, net.registry);
+      const escrow   = getEscrow(provider, net.escrow);
       const tid      = BigInt(id);
 
       const [p, owner] = await Promise.all([
@@ -81,10 +79,10 @@ export default function BuyProperty({ wallet, tokenId }) {
       try { setDeal(await escrow.getDealByToken(tid)); } catch { setDeal(null); }
 
       if (wallet.address) {
-        const xusd = getXUSD(provider);
+        const xusd = getXUSD(provider, net.xusd);
         const [bal, allow] = await Promise.all([
           xusd.balanceOf(wallet.address),
-          xusd.allowance(wallet.address, ESCROW_ADDRESS),
+          xusd.allowance(wallet.address, net.escrow),
         ]);
         setBalance(bal);
         setAllowance(allow);
@@ -105,7 +103,7 @@ export default function BuyProperty({ wallet, tokenId }) {
     if (!await checkNetwork()) return;
     setLoading(true); setStatus("Approving XUSD in MetaMask...");
     try {
-      const tx = await getXUSD(wallet.signer).approve(ESCROW_ADDRESS, prop.price);
+      const tx = await getXUSD(wallet.signer, net.xusd).approve(net.escrow, prop.price);
       await tx.wait();
       setStatus("Approved. Now click Buy Now.");
       await loadProperty(prop.tokenId.toString());
@@ -119,7 +117,7 @@ export default function BuyProperty({ wallet, tokenId }) {
     if (!await checkNetwork()) return;
     setLoading(true); setStatus("Submitting purchase in MetaMask...");
     try {
-      const tx = await getEscrow(wallet.signer).buyNow(prop.tokenId);
+      const tx = await getEscrow(wallet.signer, net.escrow).buyNow(prop.tokenId);
       await tx.wait();
       setStatus("Purchase complete. Awaiting platform verification to finalise ownership transfer.");
       await new Promise(r => setTimeout(r, 2000));
@@ -134,7 +132,7 @@ export default function BuyProperty({ wallet, tokenId }) {
     if (!await checkNetwork()) return;
     setLoading(true); setStatus("Checking pending balance...");
     try {
-      const escrow  = getEscrow(wallet.signer);
+      const escrow  = getEscrow(wallet.signer, net.escrow);
       const pending = await escrow.getPendingWithdrawal(wallet.address);
       if (pending === 0n) { setStatus("No funds to withdraw."); setLoading(false); return; }
       const tx = await escrow.withdrawFunds();
@@ -149,7 +147,7 @@ export default function BuyProperty({ wallet, tokenId }) {
   async function revokeAllowance() {
     setLoading(true); setStatus("Revoking XUSD approval...");
     try {
-      const tx = await getXUSD(wallet.signer).approve(ESCROW_ADDRESS, 0n);
+      const tx = await getXUSD(wallet.signer, net.xusd).approve(net.escrow, 0n);
       await tx.wait();
       setStatus("Allowance revoked.");
       await loadProperty(prop.tokenId.toString());

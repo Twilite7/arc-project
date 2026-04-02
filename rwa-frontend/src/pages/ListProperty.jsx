@@ -48,7 +48,7 @@ function validateForm(form) {
 }
 
 export default function ListProperty({ wallet }) {
-  const reg = useRegistry(wallet.signer, wallet.provider);
+  const reg = useRegistry(wallet.signer, wallet.provider, wallet.chainId);
   const [form, setForm] = useState({
     location: "", latitude: "", longitude: "",
     size: "", price: "", description: "",

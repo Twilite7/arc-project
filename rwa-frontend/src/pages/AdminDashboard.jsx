@@ -15,7 +15,7 @@ const labelStyle = {
 };
 
 export default function AdminDashboard({ wallet }) {
-  const reg = useRegistry(wallet.signer, wallet.provider);
+  const reg = useRegistry(wallet.signer, wallet.provider, wallet.chainId);
   const [listerAddr, setListerAddr]   = useState("");
   const [feeInput, setFeeInput]       = useState("");
   const [feeRecipient, setFeeRecipient] = useState("");

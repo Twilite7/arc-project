@@ -2,7 +2,7 @@ import { useRegistry } from "../hooks/useRegistry.js";
 import PropertyCard from "../components/PropertyCard.jsx";
 
 export default function Browse({ wallet, onBuy }) {
-  const reg = useRegistry(wallet.signer, wallet.provider);
+  const reg = useRegistry(wallet.signer, wallet.provider, wallet.chainId);
 
   return (
     <div>
