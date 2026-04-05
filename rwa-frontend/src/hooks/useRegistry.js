@@ -1,16 +1,14 @@
 import { useState, useEffect, useCallback } from "react";
 import { ethers } from "ethers";
 import RegistryABI from "../abis/PropertyRegistry.json";
-import EscrowABI from "../abis/PropertyEscrow.json";
+import EscrowABI from "../abis/PropertyEscrow8183.json";
 import { getNetwork } from "../config/networks.js";
 
-const ARC_PUBLIC_RPC     = "https://arc-testnet.drpc.org";
-const ROBINHOOD_PUBLIC_RPC = "https://robinhood-testnet.g.alchemy.com/v2/G3Xv9S7-fqFCrwMTQ2h7E";
+const ARC_PUBLIC_RPC = "https://arc-testnet.drpc.org";
 const CHUNK_SIZE         = 9000;
 
 // I return a public RPC provider for the given chainId — used when wallet not connected
-function getPublicProvider(chainId) {
-  if (chainId === 46630) return new ethers.JsonRpcProvider(ROBINHOOD_PUBLIC_RPC);
+function getPublicProvider() {
   return new ethers.JsonRpcProvider(ARC_PUBLIC_RPC);
 }
 
@@ -23,7 +21,7 @@ export function useRegistry(signer, provider, chainId) {
   const netConfig = getNetwork(chainId);
 
   const getProvider = useCallback(() => {
-    return provider || getPublicProvider(chainId || 5042002);
+    return provider || getPublicProvider();
   }, [provider, chainId]);
 
 

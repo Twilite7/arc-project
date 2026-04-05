@@ -26,7 +26,7 @@ export function useWallet() {
       const _chainId = Number(network.chainId);
 
       if (!SUPPORTED_CHAIN_IDS.includes(_chainId)) {
-        setError(`Unsupported network. Switch to Arc Testnet (5042002) or Robinhood Testnet (46630).`);
+        setError(`Unsupported network. Switch to Arc Testnet (Chain ID 5042002).`);
         return;
       }
 

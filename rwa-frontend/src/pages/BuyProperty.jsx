@@ -2,13 +2,11 @@ import { useState, useEffect } from "react";
 import { ethers } from "ethers";
 import StatusBadge from "../components/StatusBadge.jsx";
 import RegistryABI from "../abis/PropertyRegistry.json";
-import EscrowABI from "../abis/PropertyEscrow.json";
+import EscrowABI from "../abis/PropertyEscrow8183.json";
 
 const GATEWAY = "https://gateway.pinata.cloud/ipfs";
 
 const ERC20_ABI = [
-  "function approve(address spender, uint256 amount) returns (bool)",
-  "function allowance(address owner, address spender) view returns (uint256)",
   "function balanceOf(address account) view returns (uint256)",
 ];
 
@@ -26,29 +24,26 @@ function parseDescription(raw) {
 
 function getRegistry(p, addr) { return new ethers.Contract(addr, RegistryABI.abi, p); }
 function getEscrow(p, addr)   { return new ethers.Contract(addr, EscrowABI.abi, p); }
-function getXUSD(p, addr)     { return new ethers.Contract(addr, ERC20_ABI, p); }
+function getUSDC(p, addr)     { return new ethers.Contract(addr, ERC20_ABI, p); }
 
 export default function BuyProperty({ wallet, tokenId }) {
-  // I verify the user is on Arc Testnet before any transaction
-  // I derive network config from the connected wallet
   const net = wallet.network;
 
   async function checkNetwork() {
     if (!net) {
-      setStatus("Error: Unsupported network. Switch to Arc or Robinhood Testnet.");
+      setStatus("Error: Unsupported network. Switch to Arc Testnet.");
       return false;
     }
     return true;
   }
-  const [prop, setProp]             = useState(null);
-  const [deal, setDeal]             = useState(null);
-  const [xusdBalance, setBalance]   = useState(null);
-  const [xusdAllowance, setAllowance] = useState(null);
-  const [status, setStatus]         = useState("");
-  const [loading, setLoading]       = useState(false);
+
+  const [prop, setProp]         = useState(null);
+  const [deal, setDeal]         = useState(null);
+  const [usdcBalance, setBalance] = useState(null);
+  const [status, setStatus]     = useState("");
+  const [loading, setLoading]   = useState(false);
   const [rejectionReason, setRejectionReason] = useState("");
-  const [pendingWithdrawal, setPendingWithdrawal] = useState(null);
-  const [inputId, setInputId]       = useState(tokenId || "");
+  const [inputId, setInputId]   = useState(tokenId || "");
 
   async function loadProperty(id) {
     if (!id) return;
@@ -56,7 +51,7 @@ export default function BuyProperty({ wallet, tokenId }) {
     try {
       const provider = wallet.provider;
       if (!provider) { setStatus("Connect your wallet first."); return; }
-      if (!net) { setStatus("Unsupported network. Switch to Arc or Robinhood Testnet."); return; }
+      if (!net) { setStatus("Unsupported network. Switch to Arc Testnet."); return; }
 
       const registry = getRegistry(provider, net.registry);
       const escrow   = getEscrow(provider, net.escrow);
@@ -79,38 +74,37 @@ export default function BuyProperty({ wallet, tokenId }) {
         docsHash:    p.docsHash,
       });
 
+      // I check if there is an active deal for this token
       try {
-        const d = await escrow.getDealByToken(tid);
-        setDeal(d);
-        // I fetch rejection reason using queryFilter which handles ABI decoding correctly
-        if (Number(d.status) === 2) {
-          try {
-            const dealId = await escrow.tokenToDeal(tid);
-            const events = await escrow.queryFilter(
-              escrow.filters.DealRejected(dealId)
-            );
-            if (events.length > 0) {
-              setRejectionReason(events[0].args.reason || "No reason provided");
-            } else {
-              setRejectionReason("Deal was cancelled.");
-            }
-          } catch { setRejectionReason("Deal was cancelled."); }
+        const active = await escrow.activeDeal(tid);
+        if (active) {
+          const jobId = await escrow.tokenToJob(tid);
+          const buyer = await escrow.tokenToBuyer(tid);
+          setDeal({ active, jobId, buyer });
         } else {
-          setRejectionReason("");
+          setDeal(null);
         }
+        setRejectionReason("");
       } catch { setDeal(null); setRejectionReason(""); }
 
-      if (wallet.address) {
-        const xusd   = getXUSD(provider, net.xusd);
+      // I fetch rejection reason from DealRejected event if property was rejected
+      // Status 0 after a rejection means it was reset to Available — check events
+      try {
         const escrowR = getEscrow(provider, net.escrow);
-        const [bal, allow, pending] = await Promise.all([
-          xusd.balanceOf(wallet.address),
-          xusd.allowance(wallet.address, net.escrow),
-          escrowR.getPendingWithdrawal(wallet.address),
-        ]);
+        const events = await escrowR.queryFilter(
+          escrowR.filters.DealRejected(tid)
+        );
+        if (events.length > 0) {
+          const latest = events[events.length - 1];
+          setRejectionReason(latest.args.reason || "No reason provided");
+        }
+      } catch { /* no rejection events is fine */ }
+
+      // I fetch buyer USDC balance
+      if (wallet.address) {
+        const usdc = getUSDC(provider, net.usdc);
+        const bal  = await usdc.balanceOf(wallet.address);
         setBalance(bal);
-        setAllowance(allow);
-        setPendingWithdrawal(pending);
       }
     } catch (e) {
       setStatus("Property not found: " + (e.reason || e.message));
@@ -122,26 +116,21 @@ export default function BuyProperty({ wallet, tokenId }) {
     if (tokenId && wallet.provider) loadProperty(tokenId);
   }, [tokenId, wallet.provider]);
 
-  // ── Step 1: Approve XUSD ──────────────────────────────────────
-  async function approveXUSD() {
-    if (!wallet.signer || !prop) return;
-    if (!await checkNetwork()) return;
-    setLoading(true); setStatus("Approving XUSD in MetaMask...");
-    try {
-      const tx = await getXUSD(wallet.signer, net.xusd).approve(net.escrow, prop.price);
-      await tx.wait();
-      setStatus("Approved. Now click Buy Now.");
-      await loadProperty(prop.tokenId.toString());
-    } catch (e) { setStatus("Error: " + (e.reason || e.message)); }
-    setLoading(false);
-  }
-
-  // ── Step 2: Buy Now — locks XUSD in escrow ────────────────────
+  // I let the buyer purchase in one transaction — ERC-8183 handles escrow internally
   async function buyNow() {
     if (!wallet.signer || !prop) return;
     if (!await checkNetwork()) return;
-    setLoading(true); setStatus("Submitting purchase in MetaMask...");
+    setLoading(true);
+    setStatus("Step 1/2 — Approve USDC in MetaMask...");
     try {
+      // I approve the escrow to pull USDC first
+      const usdc    = new ethers.Contract(net.usdc, [
+        "function approve(address spender, uint256 amount) returns (bool)"
+      ], wallet.signer);
+      const approveTx = await usdc.approve(net.escrow, prop.price);
+      await approveTx.wait();
+      setStatus("Step 2/2 — Confirm purchase in MetaMask...");
+
       const tx = await getEscrow(wallet.signer, net.escrow).buyNow(prop.tokenId);
       await tx.wait();
       setStatus("Purchase complete. Awaiting platform verification to finalise ownership transfer.");
@@ -151,43 +140,11 @@ export default function BuyProperty({ wallet, tokenId }) {
     setLoading(false);
   }
 
-  // ── Seller: withdraw XUSD after deal is released ──────────────
-  async function withdrawFunds() {
-    if (!wallet.signer) return;
-    if (!await checkNetwork()) return;
-    setLoading(true); setStatus("Checking pending balance...");
-    try {
-      const escrow  = getEscrow(wallet.signer, net.escrow);
-      const pending = await escrow.getPendingWithdrawal(wallet.address);
-      if (pending === 0n) { setStatus("No funds to withdraw."); setLoading(false); return; }
-      const tx = await escrow.withdrawFunds();
-      await tx.wait();
-      setStatus(`Withdrawn ${ethers.formatUnits(pending, 6)} XUSD successfully.`);
-    } catch (e) { setStatus("Error: " + (e.reason || e.message)); }
-    setLoading(false);
-  }
-
-  // I check deal.seller after transfer since prop.owner changes to buyer on release
-  // I allow buyer to revoke stale allowance if a deal fails before buyNow
-  async function revokeAllowance() {
-    setLoading(true); setStatus("Revoking XUSD approval...");
-    try {
-      const tx = await getXUSD(wallet.signer, net.xusd).approve(net.escrow, 0n);
-      await tx.wait();
-      setStatus("Allowance revoked.");
-      await loadProperty(prop.tokenId.toString());
-    } catch (e) { setStatus("Error: " + (e.reason || e.message)); }
-    setLoading(false);
-  }
-
   const isSeller = prop && wallet.address &&
-    (deal ? deal.seller : prop.owner).toLowerCase() === wallet.address.toLowerCase();
+    prop.owner.toLowerCase() === wallet.address.toLowerCase();
 
-  const hasAllowance = xusdAllowance !== null && prop !== null &&
-    xusdAllowance >= prop.price;
-
-  const hasSufficientBalance = xusdBalance !== null && prop !== null &&
-    xusdBalance >= prop.price;
+  const hasSufficientBalance = usdcBalance !== null && prop !== null &&
+    usdcBalance >= prop.price;
 
   const { desc, imageSrc } = prop
     ? parseDescription(prop.description)
@@ -244,9 +201,9 @@ export default function BuyProperty({ wallet, tokenId }) {
             <p style={{ fontSize: 12, color: "var(--mid)", marginBottom: 20 }}>{desc}</p>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
               {[
-                ["GPS", `${prop.latitude}, ${prop.longitude}`],
-                ["Size", prop.size],
-                ["Price", prop.price ? `${ethers.formatUnits(prop.price, 6)} XUSD` : "..."],
+                ["GPS",   `${prop.latitude}, ${prop.longitude}`],
+                ["Size",  prop.size],
+                ["Price", prop.price ? `${ethers.formatUnits(prop.price, 6)} USDC` : "..."],
               ].map(([k, v]) => (
                 <div key={k}>
                   <div style={{ fontSize: 10, color: "var(--mid)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>{k}</div>
@@ -255,16 +212,16 @@ export default function BuyProperty({ wallet, tokenId }) {
               ))}
             </div>
 
-            {/* XUSD balance for buyers */}
-            {!isSeller && wallet.address && xusdBalance !== null && (
+            {/* USDC balance for buyers */}
+            {!isSeller && wallet.address && usdcBalance !== null && (
               <div style={{
                 marginTop: 16, padding: "10px 14px",
                 background: "var(--cream)", borderRadius: 2,
                 fontSize: 12, color: "var(--mid)",
               }}>
-                Your XUSD balance:{" "}
+                Your USDC balance:{" "}
                 <strong style={{ color: hasSufficientBalance ? "var(--green)" : "var(--red)" }}>
-                  {ethers.formatUnits(xusdBalance, 6)} XUSD
+                  {ethers.formatUnits(usdcBalance, 6)} USDC
                 </strong>
                 {!hasSufficientBalance && (
                   <span style={{ color: "var(--red)", marginLeft: 8 }}>— insufficient</span>
@@ -273,15 +230,14 @@ export default function BuyProperty({ wallet, tokenId }) {
             )}
 
             {/* Rejection notice */}
-            {deal && Number(deal.status) === 2 && (
+            {rejectionReason && prop.status === 0 && (
               <div style={{
                 marginTop: 16, padding: "10px 14px",
                 background: "rgba(139,44,44,0.06)",
                 border: "1px solid rgba(139,44,44,0.3)",
                 borderRadius: 2, fontSize: 12, color: "var(--red)",
               }}>
-                <strong>Deal Rejected</strong>
-                {rejectionReason && <span> — {rejectionReason}</span>}
+                <strong>Last deal rejected</strong> — {rejectionReason}
               </div>
             )}
 
@@ -304,61 +260,27 @@ export default function BuyProperty({ wallet, tokenId }) {
       {prop && (
         <div style={{ display: "grid", gap: 12 }}>
 
-          {/* Buyer: approve XUSD */}
-          {!isSeller && prop.status === 0 && hasSufficientBalance && !hasAllowance && (
-            <button onClick={approveXUSD} disabled={loading} style={{
+          {/* Buyer: single-step buy now */}
+          {!isSeller && prop.status === 0 && (
+            <button onClick={buyNow} disabled={loading || !hasSufficientBalance} style={{
               padding: "12px", border: "none",
-              background: "var(--charcoal)", color: "var(--warm-white)",
-              borderRadius: 2, fontSize: 12, letterSpacing: "0.08em",
-              textTransform: "uppercase", cursor: "pointer",
+              background: hasSufficientBalance ? "var(--gold)" : "var(--border)",
+              color: "var(--warm-white)", borderRadius: 2,
+              fontSize: 12, letterSpacing: "0.08em",
+              textTransform: "uppercase",
+              cursor: hasSufficientBalance ? "pointer" : "not-allowed",
+              opacity: loading ? 0.7 : 1,
             }}>
-              Step 1 — Approve {prop.price ? ethers.formatUnits(prop.price, 6) : "..."} XUSD
-            </button>
-          )}
-
-          {/* Buyer: revoke stale allowance if deal failed before buyNow */}
-          {!isSeller && prop.status === 0 && hasAllowance && !loading && (
-            <button onClick={revokeAllowance} disabled={loading} style={{
-              padding: "10px", border: "1px solid rgba(139,44,44,0.3)",
-              background: "rgba(139,44,44,0.06)", color: "var(--red)",
-              borderRadius: 2, fontSize: 11, letterSpacing: "0.08em",
-              textTransform: "uppercase", cursor: "pointer",
-            }}>Revoke Approval</button>
-          )}
-
-          {/* Buyer: buy now */}
-          {!isSeller && prop.status === 0 && hasAllowance && (
-            <button onClick={buyNow} disabled={loading} style={{
-              padding: "12px", border: "none",
-              background: "var(--gold)", color: "var(--warm-white)",
-              borderRadius: 2, fontSize: 12, letterSpacing: "0.08em",
-              textTransform: "uppercase", cursor: "pointer",
-            }}>
-              {loading ? "Processing..." : `Step 2 — Buy Now · ${prop.price ? ethers.formatUnits(prop.price, 6) : "..."} XUSD`}
-            </button>
-          )}
-
-          {/* Seller or buyer: withdraw pending XUSD after release or refund */}
-          {(isSeller || (pendingWithdrawal !== null && pendingWithdrawal > 0n)) && (
-            <button onClick={withdrawFunds} disabled={loading} style={{
-              padding: "12px", border: "1px solid var(--border)",
-              background: "transparent", borderRadius: 2,
-              fontSize: 12, color: "var(--mid)", letterSpacing: "0.08em",
-              textTransform: "uppercase", cursor: "pointer",
-            }}>
-              Withdraw Pending XUSD
-              {pendingWithdrawal !== null && pendingWithdrawal > 0n && (
-                <span style={{ marginLeft: 6, color: "var(--green)" }}>
-                  ({ethers.formatUnits(pendingWithdrawal, 6)} XUSD)
-                </span>
-              )}
+              {loading
+                ? status.startsWith("Step") ? status : "Processing..."
+                : `Buy Now · ${prop.price ? ethers.formatUnits(prop.price, 6) : "..."} USDC`}
             </button>
           )}
 
         </div>
       )}
 
-      {status && (
+      {status && !loading && (
         <div style={{
           marginTop: 20, padding: "12px 16px", borderRadius: 2, fontSize: 12,
           background: isError ? "rgba(139,44,44,0.06)" : "rgba(45,106,79,0.06)",

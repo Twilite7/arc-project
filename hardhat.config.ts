@@ -9,14 +9,8 @@ export default defineConfig({
     arcTestnet: {
       type: "http",
       url: process.env.ARC_RPC_URL || "https://rpc.testnet.arc.network",
-      chainId: 5042002, // Arc Testnet chain ID
-      accounts: [process.env.PRIVATE_KEY!, process.env.PRIVATE_KEY_2!],
+      chainId: 5042002,
+      accounts: [process.env.PRIVATE_KEY!],
     },
-    robinhood: {
-      type: "http",
-      url: "https://rpc.testnet.chain.robinhood.com",
-      accounts: [process.env.PRIVATE_KEY!, process.env.PRIVATE_KEY_2!],
-      chainId: 46630,
-    }
   },
 });

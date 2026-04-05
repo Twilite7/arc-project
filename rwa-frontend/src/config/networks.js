@@ -1,22 +1,16 @@
-// I keep all network-specific config in one place — add new chains here only
+// I keep all network config in one place — Arc Testnet only, ERC-8183 native
 export const NETWORKS = {
   5042002: {
-    name: "Arc Testnet",
-    registry: "0x14A435A1923Ef70d53BAD2AFa2d010ec8dAF5436",
-    escrow:   "0xd1b862ebE8280fB07822677c480A65bC7B1EeA6D",
-    xusd:     "0x7b7821a895fE26bF3C6A8293D4b984f10A7E38b5",
-    deployBlock: 34900000,
-  },
-  46630: {
-    name: "Robinhood Testnet",
-    registry: "0x4e20E35Cf505faFA36E21F3a9490e0A679DaFD89",
-    escrow:   "0x1935A725A549d99aF460c7228f4444b59cfcC52e",
-    xusd:     "0xF3632dA3ed3F24E8eF7ef95F9094c323C6457A2b",
-    deployBlock: 28030000,
+    name:        "Arc Testnet",
+    registry:    "0x6078713c95c0c0B008521B083c424771f2F8C0b0",
+    escrow:      "0xCBD51f24EE2E00949AC2E90B26d62917685f8bcF",
+    usdc:        "0x3600000000000000000000000000000000000000",
+    erc8183:     "0x0747EEf0706327138c69792bF28Cd525089e4583",
+    deployBlock: 35100000,
   },
 };
 
-export const SUPPORTED_CHAIN_IDS = Object.keys(NETWORKS).map(Number);
+export const SUPPORTED_CHAIN_IDS = [5042002];
 
 // I return network config for the given chainId, or null if unsupported
 export function getNetwork(chainId) {

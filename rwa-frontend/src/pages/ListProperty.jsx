@@ -169,7 +169,7 @@ export default function ListProperty({ wallet }) {
               value={form.size} onChange={e => set("size", e.target.value)} />
           </div>
           <div>
-            <label style={labelStyle}>Price (XUSD) *</label>
+            <label style={labelStyle}>Price (USDC) *</label>
             <input style={inputStyle} placeholder="50" type="number" step="0.0001" min="0"
               value={form.price} onChange={e => set("price", e.target.value)} />
           </div>
