@@ -15,7 +15,6 @@ interface IERC8183 {
         string calldata description,
         address hook
     ) external returns (uint256 jobId);
-    function setBudget(uint256 jobId, uint256 amount, bytes calldata optParams) external;
     function fund(uint256 jobId, bytes calldata optParams) external;
     function submit(uint256 jobId, bytes32 deliverable, bytes calldata optParams) external;
     function complete(uint256 jobId, bytes32 reason, bytes calldata optParams) external;
@@ -81,7 +80,7 @@ contract PropertyEscrow8183 is Ownable, Pausable, ReentrancyGuard {
         registry = IPropertyRegistry(_registry);
     }
 
-    // I let the buyer purchase atomically: pull USDC, create job, set budget, fund, submit
+    // I let the buyer purchase atomically: pull USDC, create job, fund with price, submit
     function buyNow(uint256 tokenId) external nonReentrant whenNotPaused {
         require(!activeDeal[tokenId], "Deal already active");
 
@@ -106,9 +105,9 @@ contract PropertyEscrow8183 is Ownable, Pausable, ReentrancyGuard {
             address(0)
         );
 
-        // I set budget then fund — USDC moves from this contract into ERC-8183
-        IERC8183(ERC8183).setBudget(jobId, price, "");
-        IERC8183(ERC8183).fund(jobId, "");
+        // I fund with price encoded in optParams — setBudget not required by ERC-8183
+        bytes memory encodedPrice = abi.encode(price);
+        IERC8183(ERC8183).fund(jobId, encodedPrice);
 
         // I submit deliverable: keccak256(tokenId, buyer, seller)
         bytes32 deliverable = keccak256(abi.encodePacked(tokenId, msg.sender, seller));
