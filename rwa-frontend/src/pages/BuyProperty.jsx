@@ -140,6 +140,21 @@ export default function BuyProperty({ wallet, tokenId }) {
     setLoading(false);
   }
 
+  // I let the seller submit the deliverable to ERC-8183 to signal readiness
+  async function submitDeliverable() {
+    if (!wallet.signer || !prop) return;
+    if (!await checkNetwork()) return;
+    setLoading(true); setStatus("Submitting deliverable in MetaMask...");
+    try {
+      const tx = await getEscrow(wallet.signer, net.escrow).submitDeliverable(prop.tokenId);
+      await tx.wait();
+      setStatus("Deliverable submitted. Awaiting admin to release the deal.");
+      await new Promise(r => setTimeout(r, 2000));
+      await loadProperty(prop.tokenId.toString());
+    } catch (e) { setStatus("Error: " + (e.reason || e.message)); }
+    setLoading(false);
+  }
+
   const isSeller = prop && wallet.address &&
     prop.owner.toLowerCase() === wallet.address.toLowerCase();
 
@@ -259,6 +274,19 @@ export default function BuyProperty({ wallet, tokenId }) {
       {/* Action buttons */}
       {prop && (
         <div style={{ display: "grid", gap: 12 }}>
+
+          {/* Seller: submit deliverable once property is in escrow */}
+          {isSeller && prop.status === 1 && deal && deal.active && (
+            <button onClick={submitDeliverable} disabled={loading} style={{
+              padding: "12px", border: "none",
+              background: "var(--charcoal)", color: "var(--warm-white)",
+              borderRadius: 2, fontSize: 12, letterSpacing: "0.08em",
+              textTransform: "uppercase", cursor: "pointer",
+              opacity: loading ? 0.7 : 1,
+            }}>
+              {loading ? "Processing..." : "Confirm Transfer — Submit Deliverable"}
+            </button>
+          )}
 
           {/* Buyer: single-step buy now */}
           {!isSeller && prop.status === 0 && (

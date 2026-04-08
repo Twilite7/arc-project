@@ -80,7 +80,7 @@ contract PropertyEscrow8183 is Ownable, Pausable, ReentrancyGuard {
         registry = IPropertyRegistry(_registry);
     }
 
-    // I let the buyer purchase atomically: pull USDC, create job, fund with price, submit
+    // I let the buyer purchase atomically: pull USDC, create job, fund with price
     function buyNow(uint256 tokenId) external nonReentrant whenNotPaused {
         require(!activeDeal[tokenId], "Deal already active");
 
@@ -109,10 +109,6 @@ contract PropertyEscrow8183 is Ownable, Pausable, ReentrancyGuard {
         bytes memory encodedPrice = abi.encode(price);
         IERC8183(ERC8183).fund(jobId, encodedPrice);
 
-        // I submit deliverable: keccak256(tokenId, buyer, seller)
-        bytes32 deliverable = keccak256(abi.encodePacked(tokenId, msg.sender, seller));
-        IERC8183(ERC8183).submit(jobId, deliverable, "");
-
         // I record deal state and mark property as in-escrow in the registry
         tokenToJob[tokenId]   = jobId;
         tokenToBuyer[tokenId] = msg.sender;
@@ -120,6 +116,21 @@ contract PropertyEscrow8183 is Ownable, Pausable, ReentrancyGuard {
         registry.updateStatus(tokenId, 1);
 
         emit DealCreated(tokenId, jobId, msg.sender, seller, price);
+    }
+
+    // I let the seller confirm readiness by submitting the deliverable to ERC-8183
+    // Only the seller (provider) can call this — ERC-8183 enforces it
+    function submitDeliverable(uint256 tokenId) external {
+        require(activeDeal[tokenId], "No active deal");
+        require(registry.ownerOf(tokenId) == msg.sender, "Only seller can submit");
+
+        uint256 jobId  = tokenToJob[tokenId];
+        address buyer  = tokenToBuyer[tokenId];
+        address seller = msg.sender;
+
+        // I submit deliverable: keccak256(tokenId, buyer, seller)
+        bytes32 deliverable = keccak256(abi.encodePacked(tokenId, buyer, seller));
+        IERC8183(ERC8183).submit(jobId, deliverable, "");
     }
 
     // I let the admin release a deal: ERC-8183 pays seller, registry transfers NFT
