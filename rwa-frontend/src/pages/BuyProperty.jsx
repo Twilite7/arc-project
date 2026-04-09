@@ -7,8 +7,19 @@ import EscrowABI from "../abis/PropertyEscrow8183.json";
 const GATEWAY = "https://gateway.pinata.cloud/ipfs";
 
 const ERC20_ABI = [
-  "function balanceOf(address account) view returns (uint256)",
+  "function balanceOf(address) view returns (uint256)",
+  "function approve(address,uint256) returns (bool)",
 ];
+
+// I define only the ERC-8183 functions the seller calls directly
+const ERC8183_ABI = [
+  "function setBudget(uint256 jobId, uint256 amount, bytes optParams) external",
+  "function submit(uint256 jobId, bytes32 deliverable, bytes optParams) external",
+  "function jobs(uint256) view returns (uint256,address,address,address,string,uint256,uint256,uint8,address,bytes32)",
+];
+
+// I map ERC-8183 job status codes to labels
+const JOB_STATUS = ["Open", "Funded", "Submitted", "Completed", "Rejected", "Expired"];
 
 function parseDescription(raw) {
   try {
@@ -24,26 +35,25 @@ function parseDescription(raw) {
 
 function getRegistry(p, addr) { return new ethers.Contract(addr, RegistryABI.abi, p); }
 function getEscrow(p, addr)   { return new ethers.Contract(addr, EscrowABI.abi, p); }
+function getERC8183(p, addr)  { return new ethers.Contract(addr, ERC8183_ABI, p); }
 function getUSDC(p, addr)     { return new ethers.Contract(addr, ERC20_ABI, p); }
 
 export default function BuyProperty({ wallet, tokenId }) {
   const net = wallet.network;
 
-  async function checkNetwork() {
-    if (!net) {
-      setStatus("Error: Unsupported network. Switch to Arc Testnet.");
-      return false;
-    }
+  const [prop, setProp]             = useState(null);
+  const [deal, setDeal]             = useState(null);
+  const [jobStatus, setJobStatus]   = useState(null);
+  const [usdcBalance, setBalance]   = useState(null);
+  const [status, setStatus]         = useState("");
+  const [loading, setLoading]       = useState(false);
+  const [rejectionReason, setRejectionReason] = useState("");
+  const [inputId, setInputId]       = useState(tokenId || "");
+
+  function checkNetwork() {
+    if (!net) { setStatus("Error: Unsupported network. Switch to Arc Testnet."); return false; }
     return true;
   }
-
-  const [prop, setProp]         = useState(null);
-  const [deal, setDeal]         = useState(null);
-  const [usdcBalance, setBalance] = useState(null);
-  const [status, setStatus]     = useState("");
-  const [loading, setLoading]   = useState(false);
-  const [rejectionReason, setRejectionReason] = useState("");
-  const [inputId, setInputId]   = useState(tokenId || "");
 
   async function loadProperty(id) {
     if (!id) return;
@@ -74,41 +84,41 @@ export default function BuyProperty({ wallet, tokenId }) {
         docsHash:    p.docsHash,
       });
 
-      // I check if there is an active deal for this token
+      // I load active deal state and ERC-8183 job status
       try {
         const active = await escrow.activeDeal(tid);
         if (active) {
           const jobId = await escrow.tokenToJob(tid);
           const buyer = await escrow.tokenToBuyer(tid);
           setDeal({ active, jobId, buyer });
+
+          // I read ERC-8183 job status for display
+          const erc8183 = getERC8183(provider, net.erc8183);
+          const job = await erc8183.jobs(jobId);
+          setJobStatus(Number(job[7]));
         } else {
           setDeal(null);
+          setJobStatus(null);
         }
         setRejectionReason("");
-      } catch { setDeal(null); setRejectionReason(""); }
+      } catch { setDeal(null); setJobStatus(null); setRejectionReason(""); }
 
-      // I fetch rejection reason from DealRejected event if property was rejected
-      // Status 0 after a rejection means it was reset to Available — check events
+      // I check for rejection reason from past events
       try {
-        const escrowR = getEscrow(provider, net.escrow);
-        const events = await escrowR.queryFilter(
-          escrowR.filters.DealRejected(tid)
-        );
+        const events = await escrow.queryFilter(escrow.filters.DealRejected(tid));
         if (events.length > 0) {
           const latest = events[events.length - 1];
           setRejectionReason(latest.args.reason || "No reason provided");
         }
-      } catch { /* no rejection events is fine */ }
+      } catch {}
 
-      // I fetch buyer USDC balance
       if (wallet.address) {
-        const usdc = getUSDC(provider, net.usdc);
-        const bal  = await usdc.balanceOf(wallet.address);
+        const bal = await getUSDC(provider, net.usdc).balanceOf(wallet.address);
         setBalance(bal);
       }
     } catch (e) {
       setStatus("Property not found: " + (e.reason || e.message));
-      setProp(null); setDeal(null);
+      setProp(null); setDeal(null); setJobStatus(null);
     }
   }
 
@@ -116,40 +126,53 @@ export default function BuyProperty({ wallet, tokenId }) {
     if (tokenId && wallet.provider) loadProperty(tokenId);
   }, [tokenId, wallet.provider]);
 
-  // I let the buyer purchase in one transaction — ERC-8183 handles escrow internally
+  // ─── Buyer ────────────────────────────────────────────────────
   async function buyNow() {
-    if (!wallet.signer || !prop) return;
-    if (!await checkNetwork()) return;
+    if (!wallet.signer || !prop || !checkNetwork()) return;
     setLoading(true);
-    setStatus("Step 1/2 — Approve USDC in MetaMask...");
+    setStatus("Step 1/2 — Approve USDC...");
     try {
-      // I approve the escrow to pull USDC first
-      const usdc    = new ethers.Contract(net.usdc, [
-        "function approve(address spender, uint256 amount) returns (bool)"
-      ], wallet.signer);
-      const approveTx = await usdc.approve(net.escrow, prop.price);
-      await approveTx.wait();
-      setStatus("Step 2/2 — Confirm purchase in MetaMask...");
-
-      const tx = await getEscrow(wallet.signer, net.escrow).buyNow(prop.tokenId);
-      await tx.wait();
-      setStatus("Purchase complete. Awaiting platform verification to finalise ownership transfer.");
+      await (await getUSDC(wallet.signer, net.usdc).approve(net.escrow, prop.price)).wait();
+      setStatus("Step 2/2 — Confirm purchase...");
+      await (await getEscrow(wallet.signer, net.escrow).buyNow(prop.tokenId)).wait();
+      setStatus("Purchase complete. The seller must now set the budget and submit the deliverable on ERC-8183.");
       await new Promise(r => setTimeout(r, 2000));
       await loadProperty(prop.tokenId.toString());
     } catch (e) { setStatus("Error: " + (e.reason || e.message)); }
     setLoading(false);
   }
 
-  // I let the seller submit the deliverable to ERC-8183 to signal readiness
-  async function submitDeliverable() {
-    if (!wallet.signer || !prop) return;
-    if (!await checkNetwork()) return;
-    setLoading(true); setStatus("Submitting deliverable in MetaMask...");
+  // ─── Seller: Step 1 — setBudget directly on ERC-8183 ─────────
+  async function setBudget() {
+    if (!wallet.signer || !prop || !deal || !checkNetwork()) return;
+    setLoading(true);
+    setStatus("Setting budget on ERC-8183...");
     try {
-      const tx = await getEscrow(wallet.signer, net.escrow).submitDeliverable(prop.tokenId);
-      await tx.wait();
-      setStatus("Deliverable submitted. Awaiting admin to release the deal.");
-      await new Promise(r => setTimeout(r, 2000));
+      const erc8183 = getERC8183(wallet.signer, net.erc8183);
+      await (await erc8183.setBudget(deal.jobId, prop.price, "0x")).wait();
+      setStatus("Budget set. Now submit the deliverable to confirm transfer.");
+      await new Promise(r => setTimeout(r, 1500));
+      await loadProperty(prop.tokenId.toString());
+    } catch (e) { setStatus("Error: " + (e.reason || e.message)); }
+    setLoading(false);
+  }
+
+  // ─── Seller: Step 2 — submit directly on ERC-8183 ────────────
+  async function submitDeliverable() {
+    if (!wallet.signer || !prop || !deal || !checkNetwork()) return;
+    setLoading(true);
+    setStatus("Submitting deliverable on ERC-8183...");
+    try {
+      const erc8183    = getERC8183(wallet.signer, net.erc8183);
+      const deliverable = ethers.keccak256(
+        ethers.AbiCoder.defaultAbiCoder().encode(
+          ["uint256", "address", "address"],
+          [prop.tokenId, deal.buyer, wallet.address]
+        )
+      );
+      await (await erc8183.submit(deal.jobId, deliverable, "0x")).wait();
+      setStatus("Deliverable submitted. Awaiting admin review.");
+      await new Promise(r => setTimeout(r, 1500));
       await loadProperty(prop.tokenId.toString());
     } catch (e) { setStatus("Error: " + (e.reason || e.message)); }
     setLoading(false);
@@ -157,14 +180,11 @@ export default function BuyProperty({ wallet, tokenId }) {
 
   const isSeller = prop && wallet.address &&
     prop.owner.toLowerCase() === wallet.address.toLowerCase();
-
   const hasSufficientBalance = usdcBalance !== null && prop !== null &&
     usdcBalance >= prop.price;
-
   const { desc, imageSrc } = prop
     ? parseDescription(prop.description)
     : { desc: "", imageSrc: null };
-
   const isError = status.startsWith("Error") ||
     status.startsWith("Property not found") ||
     status.startsWith("Connect");
@@ -178,34 +198,23 @@ export default function BuyProperty({ wallet, tokenId }) {
         <h1 style={{ fontSize: 48, fontWeight: 300 }}>Acquire Property</h1>
       </div>
 
-      {/* Token lookup */}
       <div style={{ display: "flex", gap: 12, marginBottom: 32 }}>
         <input
-          style={{
-            flex: 1, padding: "10px 14px",
-            border: "1px solid var(--border)", borderRadius: 2,
-            background: "var(--warm-white)", fontSize: 13, outline: "none",
-          }}
+          style={{ flex: 1, padding: "10px 14px", border: "1px solid var(--border)", borderRadius: 2, background: "var(--warm-white)", fontSize: 13, outline: "none" }}
           placeholder="Enter Token ID"
           value={inputId}
           onChange={e => setInputId(e.target.value)}
         />
         <button onClick={() => loadProperty(inputId)} style={{
-          padding: "10px 20px", border: "none",
-          background: "var(--charcoal)", color: "var(--warm-white)",
-          borderRadius: 2, fontSize: 12, letterSpacing: "0.06em", cursor: "pointer",
+          padding: "10px 20px", border: "none", background: "var(--charcoal)",
+          color: "var(--warm-white)", borderRadius: 2, fontSize: 12, letterSpacing: "0.06em", cursor: "pointer",
         }}>Load</button>
       </div>
 
-      {/* Property card */}
       {prop && (
-        <div style={{
-          background: "var(--warm-white)", border: "1px solid var(--border)",
-          borderRadius: 4, overflow: "hidden", marginBottom: 24,
-        }}>
+        <div style={{ background: "var(--warm-white)", border: "1px solid var(--border)", borderRadius: 4, overflow: "hidden", marginBottom: 24 }}>
           {imageSrc && (
-            <img src={imageSrc} alt={prop.location}
-              style={{ width: "100%", height: 200, objectFit: "cover", display: "block" }} />
+            <img src={imageSrc} alt={prop.location} style={{ width: "100%", height: 200, objectFit: "cover", display: "block" }} />
           )}
           <div style={{ padding: 28 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
@@ -227,82 +236,80 @@ export default function BuyProperty({ wallet, tokenId }) {
               ))}
             </div>
 
-            {/* USDC balance for buyers */}
             {!isSeller && wallet.address && usdcBalance !== null && (
-              <div style={{
-                marginTop: 16, padding: "10px 14px",
-                background: "var(--cream)", borderRadius: 2,
-                fontSize: 12, color: "var(--mid)",
-              }}>
+              <div style={{ marginTop: 16, padding: "10px 14px", background: "var(--cream)", borderRadius: 2, fontSize: 12, color: "var(--mid)" }}>
                 Your USDC balance:{" "}
                 <strong style={{ color: hasSufficientBalance ? "var(--green)" : "var(--red)" }}>
                   {ethers.formatUnits(usdcBalance, 6)} USDC
                 </strong>
-                {!hasSufficientBalance && (
-                  <span style={{ color: "var(--red)", marginLeft: 8 }}>— insufficient</span>
-                )}
+                {!hasSufficientBalance && <span style={{ color: "var(--red)", marginLeft: 8 }}>— insufficient</span>}
               </div>
             )}
 
-            {/* Rejection notice */}
             {rejectionReason && prop.status === 0 && (
-              <div style={{
-                marginTop: 16, padding: "10px 14px",
-                background: "rgba(139,44,44,0.06)",
-                border: "1px solid rgba(139,44,44,0.3)",
-                borderRadius: 2, fontSize: 12, color: "var(--red)",
-              }}>
+              <div style={{ marginTop: 16, padding: "10px 14px", background: "rgba(139,44,44,0.06)", border: "1px solid rgba(139,44,44,0.3)", borderRadius: 2, fontSize: 12, color: "var(--red)" }}>
                 <strong>Last deal rejected</strong> — {rejectionReason}
               </div>
             )}
 
-            {/* In escrow notice */}
             {prop.status === 1 && deal && (
-              <div style={{
-                marginTop: 16, padding: "10px 14px",
-                background: "rgba(184,151,42,0.06)",
-                border: "1px solid rgba(184,151,42,0.3)",
-                borderRadius: 2, fontSize: 12, color: "var(--gold)",
-              }}>
-                This property is in escrow. Awaiting platform verification to release ownership.
+              <div style={{ marginTop: 16, padding: "10px 14px", background: "rgba(184,151,42,0.06)", border: "1px solid rgba(184,151,42,0.3)", borderRadius: 2, fontSize: 12, color: "var(--gold)" }}>
+                In escrow — ERC-8183 job #{deal.jobId.toString()} status:{" "}
+                <strong>{jobStatus !== null ? JOB_STATUS[jobStatus] ?? jobStatus : "..."}</strong>
               </div>
             )}
           </div>
         </div>
       )}
 
-      {/* Action buttons */}
       {prop && (
         <div style={{ display: "grid", gap: 12 }}>
 
-          {/* Seller: submit deliverable once property is in escrow */}
-          {isSeller && prop.status === 1 && deal && deal.active && (
-            <button onClick={submitDeliverable} disabled={loading} style={{
-              padding: "12px", border: "none",
-              background: "var(--charcoal)", color: "var(--warm-white)",
-              borderRadius: 2, fontSize: 12, letterSpacing: "0.08em",
-              textTransform: "uppercase", cursor: "pointer",
-              opacity: loading ? 0.7 : 1,
-            }}>
-              {loading ? "Processing..." : "Confirm Transfer — Submit Deliverable"}
-            </button>
-          )}
-
-          {/* Buyer: single-step buy now */}
+          {/* Buyer: buy now */}
           {!isSeller && prop.status === 0 && (
             <button onClick={buyNow} disabled={loading || !hasSufficientBalance} style={{
               padding: "12px", border: "none",
               background: hasSufficientBalance ? "var(--gold)" : "var(--border)",
               color: "var(--warm-white)", borderRadius: 2,
-              fontSize: 12, letterSpacing: "0.08em",
-              textTransform: "uppercase",
+              fontSize: 12, letterSpacing: "0.08em", textTransform: "uppercase",
               cursor: hasSufficientBalance ? "pointer" : "not-allowed",
               opacity: loading ? 0.7 : 1,
             }}>
               {loading
-                ? status.startsWith("Step") ? status : "Processing..."
+                ? (status.startsWith("Step") ? status : "Processing...")
                 : `Buy Now · ${prop.price ? ethers.formatUnits(prop.price, 6) : "..."} USDC`}
             </button>
+          )}
+
+          {/* Seller: Step 1 — set budget on ERC-8183 (only when job is Open=0) */}
+          {isSeller && prop.status === 1 && deal && jobStatus === 0 && (
+            <button onClick={setBudget} disabled={loading} style={{
+              padding: "12px", border: "none", background: "var(--charcoal)",
+              color: "var(--warm-white)", borderRadius: 2,
+              fontSize: 12, letterSpacing: "0.08em", textTransform: "uppercase",
+              cursor: "pointer", opacity: loading ? 0.7 : 1,
+            }}>
+              {loading ? "Processing..." : `Step 1 — Set Budget · ${ethers.formatUnits(prop.price, 6)} USDC`}
+            </button>
+          )}
+
+          {/* Seller: Step 2 — submit deliverable on ERC-8183 (only when job is Funded=1) */}
+          {isSeller && prop.status === 1 && deal && jobStatus === 1 && (
+            <button onClick={submitDeliverable} disabled={loading} style={{
+              padding: "12px", border: "none", background: "var(--charcoal)",
+              color: "var(--warm-white)", borderRadius: 2,
+              fontSize: 12, letterSpacing: "0.08em", textTransform: "uppercase",
+              cursor: "pointer", opacity: loading ? 0.7 : 1,
+            }}>
+              {loading ? "Processing..." : "Step 2 — Submit Deliverable"}
+            </button>
+          )}
+
+          {/* Seller: waiting for admin after submission */}
+          {isSeller && prop.status === 1 && deal && jobStatus === 2 && (
+            <div style={{ padding: "12px 16px", background: "rgba(45,106,79,0.06)", border: "1px solid rgba(45,106,79,0.3)", borderRadius: 2, fontSize: 12, color: "var(--green)", textAlign: "center" }}>
+              Deliverable submitted — awaiting admin review
+            </div>
           )}
 
         </div>

@@ -2,6 +2,15 @@ import { useState } from "react";
 import { ethers } from "ethers";
 import { useRegistry } from "../hooks/useRegistry.js";
 
+// I define only the ERC-8183 functions the admin calls directly as evaluator
+const ERC8183_ABI = [
+  "function complete(uint256 jobId, bytes32 reason, bytes optParams) external",
+  "function reject(uint256 jobId, bytes32 reason, bytes optParams) external",
+  "function jobs(uint256) view returns (uint256,address,address,address,string,uint256,uint256,uint8,address,bytes32)",
+];
+
+const JOB_STATUS = ["Open", "Funded", "Submitted", "Completed", "Rejected", "Expired"];
+
 const inputStyle = {
   width: "100%", padding: "10px 14px",
   border: "1px solid var(--border)", borderRadius: 2,
@@ -16,23 +25,51 @@ const labelStyle = {
 
 export default function AdminDashboard({ wallet }) {
   const reg = useRegistry(wallet.signer, wallet.provider, wallet.chainId);
-  const [listerAddr, setListerAddr]   = useState("");
-  const [feeInput, setFeeInput]       = useState("");
-  const [feeRecipient, setFeeRecipient] = useState("");
-  const [expiryDays, setExpiryDays]   = useState("");
-  const [dealId, setDealId]           = useState("");
+  const net = wallet.network;
+
+  const [listerAddr, setListerAddr]     = useState("");
+  const [tokenId, setTokenId]           = useState("");
   const [rejectReason, setRejectReason] = useState("");
-  const [status, setStatus]           = useState("");
-  const [loading, setLoading]         = useState(false);
+  const [jobInfo, setJobInfo]           = useState(null);
+  const [status, setStatus]             = useState("");
+  const [loading, setLoading]           = useState(false);
 
   function msg(m) { setStatus(m); }
+
+  function getERC8183(signer) {
+    return new ethers.Contract(net.erc8183, ERC8183_ABI, signer);
+  }
+
+  // I load ERC-8183 job info for a given token so admin can see current state
+  async function loadDealInfo() {
+    if (!tokenId || !wallet.provider || !net) return;
+    try {
+      const escrow  = reg.getEscrow(wallet.provider);
+      const active  = await escrow.activeDeal(BigInt(tokenId));
+      if (!active) { setJobInfo(null); msg("No active deal for token #" + tokenId); return; }
+
+      const jobId   = await escrow.tokenToJob(BigInt(tokenId));
+      const buyer   = await escrow.tokenToBuyer(BigInt(tokenId));
+      const price   = await escrow.tokenToPrice(BigInt(tokenId));
+      const erc8183 = new ethers.Contract(net.erc8183, ERC8183_ABI, wallet.provider);
+      const job     = await erc8183.jobs(jobId);
+
+      setJobInfo({
+        jobId: jobId.toString(),
+        buyer,
+        price: ethers.formatUnits(price, 6),
+        jobStatus: Number(job[7]),
+        expiredAt: Number(job[6]),
+      });
+      msg("");
+    } catch (e) { msg("Error: " + (e.reason || e.message)); setJobInfo(null); }
+  }
 
   async function addLister() {
     if (!wallet.signer || !listerAddr) return;
     setLoading(true); msg("Adding verified lister...");
     try {
-      const registry = reg.getRegistry(wallet.signer);
-      const tx = await registry.setVerifiedLister(listerAddr, true);
+      const tx = await reg.getRegistry(wallet.signer).setVerifiedLister(listerAddr, true);
       await tx.wait();
       msg("Lister added: " + listerAddr);
       setListerAddr("");
@@ -44,8 +81,7 @@ export default function AdminDashboard({ wallet }) {
     if (!wallet.signer || !listerAddr) return;
     setLoading(true); msg("Removing lister...");
     try {
-      const registry = reg.getRegistry(wallet.signer);
-      const tx = await registry.setVerifiedLister(listerAddr, false);
+      const tx = await reg.getRegistry(wallet.signer).setVerifiedLister(listerAddr, false);
       await tx.wait();
       msg("Lister removed: " + listerAddr);
       setListerAddr("");
@@ -53,55 +89,48 @@ export default function AdminDashboard({ wallet }) {
     setLoading(false);
   }
 
-  async function updateFee() {
-    if (!wallet.signer || !feeInput || !feeRecipient) return;
-    setLoading(true); msg("Updating platform fee...");
-    try {
-      const escrow = reg.getEscrow(wallet.signer);
-      const tx = await escrow.setPlatformFee(Number(feeInput) * 100, feeRecipient);
-      await tx.wait();
-      msg(`Fee updated to ${feeInput}%`);
-    } catch (e) { msg("Error: " + e.message); }
-    setLoading(false);
-  }
-
-  async function updateExpiry() {
-    if (!wallet.signer || !expiryDays) return;
-    setLoading(true); msg("Updating deal expiry...");
-    try {
-      const escrow = reg.getEscrow(wallet.signer);
-      const tx = await escrow.setDealExpiry(Number(expiryDays) * 86400);
-      await tx.wait();
-      msg(`Expiry updated to ${expiryDays} days`);
-    } catch (e) { msg("Error: " + e.message); }
-    setLoading(false);
-  }
-
-  // I release a deal after off-chain verification passes
+  // I release a deal:
+  //   Step 1 — admin calls complete() on ERC-8183 as evaluator
+  //   Step 2 — admin calls releaseDeal() on escrow (verifies job is Completed)
   async function releaseDeal() {
-    if (!wallet.signer || !dealId) return;
-    setLoading(true); msg("Releasing deal — transferring ownership...");
+    if (!wallet.signer || !tokenId || !jobInfo) return;
+    setLoading(true);
     try {
-      const escrow = reg.getEscrow(wallet.signer);
-      const tx = await escrow.releaseDeal(BigInt(dealId));
-      await tx.wait();
-      msg(`Deal #${dealId} released. Ownership transferred to buyer.`);
-      setDealId("");
+      const erc8183 = getERC8183(wallet.signer);
+      const escrow  = reg.getEscrow(wallet.signer);
+
+      msg("Step 1/2 — Completing ERC-8183 job...");
+      const reason = ethers.keccak256(ethers.toUtf8Bytes("property-transfer-approved"));
+      await (await erc8183.complete(BigInt(jobInfo.jobId), reason, "0x")).wait();
+
+      msg("Step 2/2 — Releasing deal and transferring NFT...");
+      await (await escrow.releaseDeal(BigInt(tokenId))).wait();
+
+      msg(`Deal #${tokenId} released. Ownership transferred to buyer.`);
+      setTokenId(""); setJobInfo(null);
     } catch (e) { msg("Error: " + (e.reason || e.message)); }
     setLoading(false);
   }
 
-  // I reject a deal and refund the buyer if verification fails
+  // I reject a deal:
+  //   Step 1 — admin calls reject() on ERC-8183 as evaluator
+  //   Step 2 — admin calls rejectDeal() on escrow (verifies job is Rejected, refunds buyer)
   async function rejectDeal() {
-    if (!wallet.signer || !dealId) return;
-    setLoading(true); msg("Rejecting deal — refunding buyer...");
+    if (!wallet.signer || !tokenId || !jobInfo) return;
+    setLoading(true);
     try {
-      const escrow = reg.getEscrow(wallet.signer);
-      const reason = rejectReason.trim() || "Rejected by platform";
-      const tx = await escrow.rejectDeal(BigInt(dealId), reason);
-      await tx.wait();
-      msg(`Deal #${dealId} rejected. Buyer refund queued.`);
-      setDealId(""); setRejectReason("");
+      const erc8183 = getERC8183(wallet.signer);
+      const escrow  = reg.getEscrow(wallet.signer);
+      const reason  = rejectReason.trim() || "Rejected by platform";
+
+      msg("Step 1/2 — Rejecting ERC-8183 job...");
+      await (await erc8183.reject(BigInt(jobInfo.jobId), ethers.keccak256(ethers.toUtf8Bytes(reason)), "0x")).wait();
+
+      msg("Step 2/2 — Refunding buyer...");
+      await (await escrow.rejectDeal(BigInt(tokenId), reason)).wait();
+
+      msg(`Deal #${tokenId} rejected. Buyer refunded.`);
+      setTokenId(""); setRejectReason(""); setJobInfo(null);
     } catch (e) { msg("Error: " + (e.reason || e.message)); }
     setLoading(false);
   }
@@ -110,9 +139,7 @@ export default function AdminDashboard({ wallet }) {
     if (!wallet.signer) return;
     setLoading(true); msg("Pausing registry...");
     try {
-      const registry = reg.getRegistry(wallet.signer);
-      const tx = await registry.pause();
-      await tx.wait();
+      await (await reg.getRegistry(wallet.signer).pause()).wait();
       msg("Registry paused.");
     } catch (e) { msg("Error: " + e.message); }
     setLoading(false);
@@ -122,9 +149,7 @@ export default function AdminDashboard({ wallet }) {
     if (!wallet.signer) return;
     setLoading(true); msg("Unpausing registry...");
     try {
-      const registry = reg.getRegistry(wallet.signer);
-      const tx = await registry.unpause();
-      await tx.wait();
+      await (await reg.getRegistry(wallet.signer).unpause()).wait();
       msg("Registry unpaused.");
     } catch (e) { msg("Error: " + e.message); }
     setLoading(false);
@@ -144,6 +169,9 @@ export default function AdminDashboard({ wallet }) {
       borderRadius: 4, padding: 28, marginBottom: 16,
     }}>{children}</div>
   );
+
+  const canRelease = jobInfo && jobInfo.jobStatus === 2; // Submitted
+  const canReject  = jobInfo && (jobInfo.jobStatus === 1 || jobInfo.jobStatus === 2); // Funded or Submitted
 
   return (
     <div style={{ maxWidth: 600 }}>
@@ -187,65 +215,77 @@ export default function AdminDashboard({ wallet }) {
         {card(<>
           {section("Deal Management")}
           <p style={{ fontSize: 12, color: "var(--mid)", marginBottom: 16, lineHeight: 1.6 }}>
-            After verifying off-chain documentation, release a deal to transfer ownership
-            to the buyer. Reject to cancel and refund the buyer in full.
+            Enter a token ID to load the active deal. Release after the seller has submitted
+            the deliverable on ERC-8183. Reject at any point to refund the buyer.
           </p>
-          <label style={labelStyle}>Deal ID</label>
-          <input style={{ ...inputStyle, marginBottom: 12 }}
-            placeholder="1"
-            type="number" min="1"
-            value={dealId} onChange={e => setDealId(e.target.value)} />
-          <label style={labelStyle}>Rejection Reason (optional)</label>
+
+          <label style={labelStyle}>Token ID</label>
+          <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
+            <input style={{ ...inputStyle, marginBottom: 0 }}
+              placeholder="1"
+              type="number" min="1"
+              value={tokenId} onChange={e => { setTokenId(e.target.value); setJobInfo(null); }} />
+            <button onClick={loadDealInfo} disabled={loading || !tokenId} style={{
+              padding: "10px 16px", border: "none", whiteSpace: "nowrap",
+              background: "var(--charcoal)", color: "var(--warm-white)",
+              borderRadius: 2, fontSize: 12, letterSpacing: "0.06em", cursor: "pointer",
+            }}>Load</button>
+          </div>
+
+          {/* I show ERC-8183 job info once loaded */}
+          {jobInfo && (
+            <div style={{
+              marginBottom: 16, padding: "12px 14px",
+              background: "var(--cream)", borderRadius: 2, fontSize: 12,
+            }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                {[
+                  ["ERC-8183 Job", "#" + jobInfo.jobId],
+                  ["Job Status", JOB_STATUS[jobInfo.jobStatus] ?? jobInfo.jobStatus],
+                  ["Buyer", jobInfo.buyer.slice(0, 6) + "..." + jobInfo.buyer.slice(-4)],
+                  ["Locked", jobInfo.price + " USDC"],
+                ].map(([k, v]) => (
+                  <div key={k}>
+                    <div style={{ fontSize: 10, color: "var(--mid)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 2 }}>{k}</div>
+                    <div style={{ fontWeight: 500 }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <label style={labelStyle}>Rejection Reason</label>
           <input style={{ ...inputStyle, marginBottom: 16 }}
             placeholder="Title deed verification failed"
             value={rejectReason} onChange={e => setRejectReason(e.target.value)} />
+
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <button onClick={releaseDeal} disabled={loading || !dealId} style={{
+            <button onClick={releaseDeal} disabled={loading || !canRelease} style={{
               padding: "10px", border: "none",
-              background: "var(--green)", color: "#fff",
-              borderRadius: 2, fontSize: 12, letterSpacing: "0.06em", cursor: "pointer",
-            }}>Release Deal</button>
-            <button onClick={rejectDeal} disabled={loading || !dealId} style={{
-              padding: "10px", border: "1px solid var(--red)",
-              background: "rgba(139,44,44,0.06)", color: "var(--red)",
-              borderRadius: 2, fontSize: 12, letterSpacing: "0.06em", cursor: "pointer",
+              background: canRelease ? "var(--green)" : "var(--border)",
+              color: canRelease ? "#fff" : "var(--mid)",
+              borderRadius: 2, fontSize: 12, letterSpacing: "0.06em",
+              cursor: canRelease ? "pointer" : "not-allowed",
+            }}>
+              {loading ? "Processing..." : "Release Deal"}
+            </button>
+            <button onClick={rejectDeal} disabled={loading || !canReject} style={{
+              padding: "10px",
+              border: canReject ? "1px solid var(--red)" : "1px solid var(--border)",
+              background: canReject ? "rgba(139,44,44,0.06)" : "transparent",
+              color: canReject ? "var(--red)" : "var(--mid)",
+              borderRadius: 2, fontSize: 12, letterSpacing: "0.06em",
+              cursor: canReject ? "pointer" : "not-allowed",
             }}>Reject &amp; Refund</button>
           </div>
-        </>)}
 
-        {/* Platform Fee */}
-        {card(<>
-          {section("Platform Fee")}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 12 }}>
-            <div>
-              <label style={labelStyle}>Fee % (max 10)</label>
-              <input style={inputStyle} placeholder="1" type="number" min="0" max="10"
-                value={feeInput} onChange={e => setFeeInput(e.target.value)} />
-            </div>
-            <div>
-              <label style={labelStyle}>Fee Recipient</label>
-              <input style={inputStyle} placeholder="0x..."
-                value={feeRecipient} onChange={e => setFeeRecipient(e.target.value)} />
-            </div>
-          </div>
-          <button onClick={updateFee} disabled={loading} style={{
-            padding: "10px 20px", border: "none",
-            background: "var(--charcoal)", color: "var(--warm-white)",
-            borderRadius: 2, fontSize: 12, letterSpacing: "0.06em", cursor: "pointer",
-          }}>Update Fee</button>
-        </>)}
-
-        {/* Deal Expiry */}
-        {card(<>
-          {section("Deal Expiry")}
-          <label style={labelStyle}>Expiry (days, 1–30)</label>
-          <input style={{ ...inputStyle, marginBottom: 12 }} placeholder="7" type="number"
-            value={expiryDays} onChange={e => setExpiryDays(e.target.value)} />
-          <button onClick={updateExpiry} disabled={loading} style={{
-            padding: "10px 20px", border: "none",
-            background: "var(--charcoal)", color: "var(--warm-white)",
-            borderRadius: 2, fontSize: 12, letterSpacing: "0.06em", cursor: "pointer",
-          }}>Update Expiry</button>
+          {/* I explain why buttons are disabled */}
+          {jobInfo && !canRelease && jobInfo.jobStatus !== 4 && (
+            <p style={{ marginTop: 10, fontSize: 11, color: "var(--mid)" }}>
+              Release is available once the seller submits the deliverable on ERC-8183
+              (job must reach Submitted status).
+            </p>
+          )}
         </>)}
 
         {/* Emergency Controls */}
