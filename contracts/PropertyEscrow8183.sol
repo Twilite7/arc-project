@@ -98,15 +98,14 @@ contract PropertyEscrow8183 is Ownable, Pausable, ReentrancyGuard {
         emit DealCreated(tokenId, jobId, msg.sender, seller, price);
     }
 
-    // I let the seller confirm readiness — seller calls submit on ERC-8183 as provider
+    // I let the seller signal readiness for transfer — recorded via event
+    // ERC-8183 submit is provider-only and cannot be called by the escrow contract
+    event DeliverableSubmitted(uint256 indexed tokenId, uint256 indexed jobId, address seller);
+
     function submitDeliverable(uint256 tokenId) external {
         require(activeDeal[tokenId], "No active deal");
         require(registry.ownerOf(tokenId) == msg.sender, "Only seller can submit");
-
-        uint256 jobId  = tokenToJob[tokenId];
-        address buyer  = tokenToBuyer[tokenId];
-        bytes32 deliverable = keccak256(abi.encodePacked(tokenId, buyer, msg.sender));
-        IERC8183(ERC8183).submit(jobId, deliverable, "");
+        emit DeliverableSubmitted(tokenId, tokenToJob[tokenId], msg.sender);
     }
 
     // I let the admin release: pay seller from our USDC balance, transfer NFT to buyer
