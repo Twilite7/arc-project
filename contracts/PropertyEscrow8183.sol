@@ -16,11 +16,21 @@ interface IERC8183 {
     function jobs(uint256) external view returns (uint256,address,address,address,string memory,uint256,uint256,uint8,address,bytes32);
 }
 
+struct Property {
+    string location;
+    string latitude;
+    string longitude;
+    string size;
+    uint256 price;
+    string description;
+    bytes32 docsHash;
+    bytes sellerSig;
+    uint8 status;
+    address[] previousOwners;
+}
+
 interface IPropertyRegistry {
-    function getProperty(uint256 tokenId) external view returns (
-        string memory,string memory,string memory,string memory,
-        uint256,string memory,bytes32,bytes memory,uint8,address[] memory
-    );
+    function getProperty(uint256 tokenId) external view returns (Property memory);
     function ownerOf(uint256 tokenId) external view returns (address);
     function updateStatus(uint256 tokenId, uint8 status) external;
     function transferProperty(uint256 tokenId, address from, address to) external;
@@ -56,7 +66,9 @@ contract PropertyEscrow8183 is Ownable, Pausable, ReentrancyGuard {
     function buyNow(uint256 tokenId) external nonReentrant whenNotPaused {
         require(!activeDeal[tokenId], "Deal already active");
 
-        (,,,, uint256 price,,,,uint8 status,) = registry.getProperty(tokenId);
+        Property memory prop = registry.getProperty(tokenId);
+        uint256 price  = prop.price;
+        uint8   status = prop.status;
         address seller = registry.ownerOf(tokenId);
 
         require(status == 0,                     "Property not available");
