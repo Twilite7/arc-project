@@ -117,9 +117,6 @@ contract PropertyEscrow8183 is Ownable, Pausable, ReentrancyGuard {
         uint256 price  = tokenToPrice[tokenId];
         address seller = registry.ownerOf(tokenId);
 
-        // I mark ERC-8183 job complete for audit trail
-        IERC8183(ERC8183).complete(jobId, keccak256(bytes("property-transfer-approved")), "");
-
         // I pay seller directly from this contract
         IERC20(USDC).safeTransfer(seller, price);
 
@@ -139,9 +136,6 @@ contract PropertyEscrow8183 is Ownable, Pausable, ReentrancyGuard {
         uint256 jobId = tokenToJob[tokenId];
         uint256 price = tokenToPrice[tokenId];
         address buyer = tokenToBuyer[tokenId];
-
-        // I mark ERC-8183 job rejected for audit trail
-        IERC8183(ERC8183).reject(jobId, keccak256(bytes(reason)), "");
 
         // I refund buyer directly from this contract
         IERC20(USDC).safeTransfer(buyer, price);
