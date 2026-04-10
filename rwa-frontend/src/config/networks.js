@@ -6,7 +6,7 @@ export const NETWORKS = {
     escrow:      "0x3Aa2Bc6D5aF9349811f994bE61233E3E869fb145",
     usdc:        "0x3600000000000000000000000000000000000000",
     erc8183:     "0x0747EEf0706327138c69792bF28Cd525089e4583",
-    deployBlock: 36700000,
+    deployBlock: 36400000,
   },
 };
 
