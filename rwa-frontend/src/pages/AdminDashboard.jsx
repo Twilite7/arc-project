@@ -123,10 +123,16 @@ export default function AdminDashboard({ wallet }) {
       const escrow  = reg.getEscrow(wallet.signer);
       const reason  = rejectReason.trim() || "Rejected by platform";
 
-      msg("Step 1/2 — Rejecting ERC-8183 job...");
-      await (await erc8183.reject(BigInt(jobInfo.jobId), ethers.keccak256(ethers.toUtf8Bytes(reason)), "0x")).wait();
+      // I only call ERC-8183 reject if the job has been funded (status >= 1)
+      // If job is still Open (0), USDC is still in escrow — skip ERC-8183 reject
+      if (jobInfo.jobStatus >= 1) {
+        msg("Step 1/2 — Rejecting ERC-8183 job...");
+        await (await erc8183.reject(BigInt(jobInfo.jobId), ethers.keccak256(ethers.toUtf8Bytes(reason)), "0x")).wait();
+        msg("Step 2/2 — Refunding buyer...");
+      } else {
+        msg("Refunding buyer...");
+      }
 
-      msg("Step 2/2 — Refunding buyer...");
       await (await escrow.rejectDeal(BigInt(tokenId), reason)).wait();
 
       msg(`Deal #${tokenId} rejected. Buyer refunded.`);
@@ -171,7 +177,7 @@ export default function AdminDashboard({ wallet }) {
   );
 
   const canRelease = jobInfo && jobInfo.jobStatus === 2; // Submitted
-  const canReject  = jobInfo && (jobInfo.jobStatus === 1 || jobInfo.jobStatus === 2); // Funded or Submitted
+  const canReject  = jobInfo && (jobInfo.jobStatus === 0 || jobInfo.jobStatus === 1 || jobInfo.jobStatus === 2); // Open, Funded, or Submitted
 
   return (
     <div style={{ maxWidth: 600 }}>
@@ -282,8 +288,9 @@ export default function AdminDashboard({ wallet }) {
           {/* I explain why buttons are disabled */}
           {jobInfo && !canRelease && jobInfo.jobStatus !== 4 && (
             <p style={{ marginTop: 10, fontSize: 11, color: "var(--mid)" }}>
-              Release is available once the seller submits the deliverable on ERC-8183
-              (job must reach Submitted status).
+              {jobInfo.jobStatus === 0 && "Waiting for seller to set budget and fund the job."}
+              {jobInfo.jobStatus === 1 && "Waiting for seller to submit the deliverable on ERC-8183."}
+              {jobInfo.jobStatus === 2 && ""}
             </p>
           )}
         </>)}

@@ -7,9 +7,10 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-// I define only the ERC-8183 functions this contract calls or reads
 interface IERC8183 {
     function createJob(address,address,uint256,string calldata,address) external returns (uint256);
+    function fund(uint256,bytes calldata) external;
+    function claimRefund(uint256) external;
     function jobs(uint256) external view returns (
         uint256 id,
         address client,
@@ -24,7 +25,7 @@ interface IERC8183 {
     );
 }
 
-// I define ERC-8183 job status codes matching the reference implementation
+// ERC-8183 job status codes
 // Open=0 Funded=1 Submitted=2 Completed=3 Rejected=4 Expired=5
 uint8 constant JOB_COMPLETED = 3;
 uint8 constant JOB_REJECTED  = 4;
@@ -51,10 +52,11 @@ interface IPropertyRegistry {
 }
 
 // Security assumptions:
-//   - Admin (owner) is trusted: can call complete/reject on ERC-8183 and release/reject here
-//   - ERC-8183 proxy implementation is trusted not to reorder jobs() return fields
-//   - USDC at 0x3600... is the canonical Arc native stablecoin
-//   - Seller is the NFT owner at time of buyNow; transferProperty enforces this again
+//   - Admin (owner) is trusted: acts as ERC-8183 evaluator and escrow admin
+//   - ERC-8183 auto-refunds client on reject() and auto-pays provider on complete()
+//   - USDC held in escrow until fundJob moves it to ERC-8183
+//   - After complete(), ERC-8183 pays seller directly — escrow only transfers NFT
+//   - After reject(), ERC-8183 refunds escrow — escrow then refunds buyer
 contract PropertyEscrow8183 is Ownable, Pausable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -69,8 +71,11 @@ contract PropertyEscrow8183 is Ownable, Pausable, ReentrancyGuard {
     mapping(uint256 => address) public tokenToBuyer;
     mapping(uint256 => uint256) public tokenToPrice;
     mapping(uint256 => bool)    public activeDeal;
+    // I track whether the seller has funded the ERC-8183 job
+    mapping(uint256 => bool)    public jobFunded;
 
     event DealCreated(uint256 indexed tokenId, uint256 indexed jobId, address buyer, address seller, uint256 price);
+    event JobFunded(uint256 indexed tokenId, uint256 indexed jobId);
     event DealReleased(uint256 indexed tokenId, uint256 indexed jobId, address buyer, address seller);
     event DealRejected(uint256 indexed tokenId, uint256 indexed jobId, string reason);
     event DealExpired(uint256 indexed tokenId, uint256 indexed jobId, address buyer);
@@ -80,14 +85,9 @@ contract PropertyEscrow8183 is Ownable, Pausable, ReentrancyGuard {
         registry = IPropertyRegistry(_registry);
     }
 
-    // ─── Buyer ────────────────────────────────────────────────────
-    // I atomically pull USDC into this contract and create an ERC-8183 job.
-    // After this call the seller must:
-    //   1. Call setBudget(jobId, price, "0x") directly on ERC-8183 (provider-only)
-    //   2. Call submit(jobId, deliverable, "0x") directly on ERC-8183 (provider-only)
-    // Then the admin must:
-    //   3. Call complete(jobId, reason, "0x") directly on ERC-8183 (evaluator-only)
-    //   4. Call releaseDeal(tokenId) on this contract
+    // ─── Step 1: Buyer ───────────────────────────────────────────
+    // I lock USDC in this contract and create the ERC-8183 job.
+    // After this: seller calls setBudget() directly on ERC-8183, then calls fundJob() here.
     function buyNow(uint256 tokenId) external nonReentrant whenNotPaused {
         require(!activeDeal[tokenId], "Deal already active");
 
@@ -100,7 +100,7 @@ contract PropertyEscrow8183 is Ownable, Pausable, ReentrancyGuard {
         require(seller != msg.sender,            "Seller cannot buy own property");
         require(price > 0 && price <= MAX_PRICE, "Invalid price");
 
-        // I pull USDC from buyer — held here, not in ERC-8183
+        // I pull USDC from buyer — held here until fundJob or rejectDeal
         IERC20(USDC).safeTransferFrom(msg.sender, address(this), price);
 
         // I create ERC-8183 job: this contract=client, seller=provider, admin=evaluator
@@ -113,46 +113,68 @@ contract PropertyEscrow8183 is Ownable, Pausable, ReentrancyGuard {
             address(0)
         );
 
-        // I write state after external calls that can revert (createJob)
-        // safeTransferFrom already completed — if createJob reverts the whole tx reverts
         tokenToJob[tokenId]   = jobId;
         tokenToBuyer[tokenId] = msg.sender;
         tokenToPrice[tokenId] = price;
         activeDeal[tokenId]   = true;
+        jobFunded[tokenId]    = false;
         registry.updateStatus(tokenId, 1);
 
         emit DealCreated(tokenId, jobId, msg.sender, seller, price);
     }
 
-    // ─── Admin ────────────────────────────────────────────────────
-    // I release funds and transfer NFT only after ERC-8183 job is Completed.
-    // Admin must call complete() on ERC-8183 first (evaluator-only there).
-    // Note: admin trust assumption — admin controls both complete() and releaseDeal().
+    // ─── Step 2: Seller ──────────────────────────────────────────
+    // I move USDC from this contract into ERC-8183 after seller has called setBudget().
+    // Seller must call setBudget(jobId, price, "0x") directly on ERC-8183 first.
+    // Then seller calls submit(jobId, deliverable, "0x") directly on ERC-8183.
+    function fundJob(uint256 tokenId) external nonReentrant whenNotPaused {
+        require(activeDeal[tokenId],                           "No active deal");
+        require(!jobFunded[tokenId],                           "Job already funded");
+        require(registry.ownerOf(tokenId) == msg.sender,      "Only seller can fund job");
+
+        uint256 jobId = tokenToJob[tokenId];
+        uint256 price = tokenToPrice[tokenId];
+
+        // I verify seller actually set the budget before we fund
+        (,,,,,uint256 budget,,,, ) = IERC8183(ERC8183).jobs(jobId);
+        require(budget == price, "Budget must match listing price");
+
+        // I approve ERC-8183 to pull exactly price from this contract, then fund
+        IERC20(USDC).forceApprove(ERC8183, price);
+        IERC8183(ERC8183).fund(jobId, "0x");
+
+        jobFunded[tokenId] = true;
+        emit JobFunded(tokenId, jobId);
+    }
+
+    // ─── Step 3: Admin — Release ─────────────────────────────────
+    // Admin calls complete() on ERC-8183 first (pays seller automatically),
+    // then calls this to transfer the NFT to buyer.
     function releaseDeal(uint256 tokenId) external onlyOwner whenNotPaused {
-        require(activeDeal[tokenId], "No active deal");
+        require(activeDeal[tokenId],  "No active deal");
+        require(jobFunded[tokenId],   "Job not funded");
 
         uint256 jobId  = tokenToJob[tokenId];
         address buyer  = tokenToBuyer[tokenId];
-        uint256 price  = tokenToPrice[tokenId];
         address seller = registry.ownerOf(tokenId);
 
-        // I verify ERC-8183 job reached Completed state — this is the binding gate
-        (,,,,,, uint256 expiredAt, uint8 jobStatus,,) = IERC8183(ERC8183).jobs(jobId);
+        // I verify ERC-8183 job is Completed — admin must have called complete() first
+        (,,,,,,,uint8 jobStatus,,) = IERC8183(ERC8183).jobs(jobId);
         require(jobStatus == JOB_COMPLETED, "ERC-8183 job not completed");
-        require(block.timestamp <= expiredAt + 30 days, "Deal window closed");
 
-        // I clear state before transfers to prevent reentrancy
+        // I clear state before external calls
         _clearDeal(tokenId);
 
-        // I pay seller then transfer NFT
-        IERC20(USDC).safeTransfer(seller, price);
+        // I transfer NFT — ERC-8183 already paid seller on complete()
         registry.transferProperty(tokenId, seller, buyer);
 
         emit DealReleased(tokenId, jobId, buyer, seller);
     }
 
-    // I reject the deal only after ERC-8183 job is Rejected.
-    // Admin must call reject() on ERC-8183 first (evaluator-only there).
+    // ─── Step 3: Admin — Reject ──────────────────────────────────
+    // Admin calls reject() on ERC-8183 first (auto-refunds escrow),
+    // then calls this to refund buyer from escrow balance.
+    // If job not yet funded, USDC is still in escrow — refund directly.
     function rejectDeal(uint256 tokenId, string calldata reason) external onlyOwner {
         require(activeDeal[tokenId], "No active deal");
         require(bytes(reason).length > 0 && bytes(reason).length <= 200, "Invalid reason");
@@ -161,29 +183,31 @@ contract PropertyEscrow8183 is Ownable, Pausable, ReentrancyGuard {
         uint256 price = tokenToPrice[tokenId];
         address buyer = tokenToBuyer[tokenId];
 
-        // I verify ERC-8183 job reached Rejected state
-        (,,,,,,,uint8 jobStatus,,) = IERC8183(ERC8183).jobs(jobId);
-        require(jobStatus == JOB_REJECTED, "ERC-8183 job not rejected");
+        if (jobFunded[tokenId]) {
+            // I verify ERC-8183 job is Rejected — admin must have called reject() first
+            // reject() auto-refunds escrow so our balance is restored
+            (,,,,,,,uint8 jobStatus,,) = IERC8183(ERC8183).jobs(jobId);
+            require(jobStatus == JOB_REJECTED, "ERC-8183 job not rejected");
+        }
 
         // I clear state before transfers
         _clearDeal(tokenId);
 
-        // I refund buyer and restore property to available
+        // I refund buyer from escrow balance and restore property
         IERC20(USDC).safeTransfer(buyer, price);
         registry.updateStatus(tokenId, 0);
 
         emit DealRejected(tokenId, jobId, reason);
     }
 
-    // ─── Expiry recovery ──────────────────────────────────────────
-    // I let only the buyer or admin trigger a refund once the ERC-8183 job has expired.
-    // This prevents USDC being permanently stuck if neither party acts within 7 days.
+    // ─── Expiry recovery ─────────────────────────────────────────
+    // I let the buyer or admin recover funds after the ERC-8183 job expires.
     function claimExpired(uint256 tokenId) external nonReentrant {
+        require(activeDeal[tokenId], "No active deal");
         require(
             msg.sender == tokenToBuyer[tokenId] || msg.sender == owner(),
             "Only buyer or admin"
         );
-        require(activeDeal[tokenId], "No active deal");
 
         uint256 jobId = tokenToJob[tokenId];
         uint256 price = tokenToPrice[tokenId];
@@ -195,10 +219,16 @@ contract PropertyEscrow8183 is Ownable, Pausable, ReentrancyGuard {
             "Deal not yet expired"
         );
 
-        // I clear state before transfers
+        bool wasFunded = jobFunded[tokenId];
         _clearDeal(tokenId);
 
-        // I refund buyer and restore property to available
+        // I pull USDC back from ERC-8183 if the job was funded before expiry
+        // claimRefund is valid on Expired jobs and returns funds to the client (this contract)
+        if (wasFunded) {
+            IERC8183(ERC8183).claimRefund(jobId);
+        }
+
+        // I refund buyer from escrow balance and restore property
         IERC20(USDC).safeTransfer(buyer, price);
         registry.updateStatus(tokenId, 0);
 
@@ -210,6 +240,7 @@ contract PropertyEscrow8183 is Ownable, Pausable, ReentrancyGuard {
 
     function _clearDeal(uint256 tokenId) internal {
         activeDeal[tokenId]   = false;
+        jobFunded[tokenId]    = false;
         tokenToJob[tokenId]   = 0;
         tokenToBuyer[tokenId] = address(0);
         tokenToPrice[tokenId] = 0;
