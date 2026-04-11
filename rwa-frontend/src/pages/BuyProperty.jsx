@@ -143,36 +143,29 @@ export default function BuyProperty({ wallet, tokenId }) {
     setLoading(false);
   }
 
-  // ─── Seller: Step 1 — setBudget directly on ERC-8183 ─────────
-  async function setBudget() {
+  // ─── Seller: Step 1 — setBudget + fundJob combined ──────────────
+  // I combine both into one sequential flow so seller signs two txns back to back
+  async function setBudgetAndFund() {
     if (!wallet.signer || !prop || !deal || !checkNetwork()) return;
     setLoading(true);
-    setStatus("Setting budget on ERC-8183...");
     try {
       const erc8183 = getERC8183(wallet.signer, net.erc8183);
+      const escrow  = getEscrow(wallet.signer, net.escrow);
+
+      setStatus("Step 1/2 — Set budget on ERC-8183...");
       await (await erc8183.setBudget(deal.jobId, prop.price, "0x")).wait();
-      setStatus("Budget set. Now submit the deliverable to confirm transfer.");
+
+      setStatus("Step 2/2 — Fund escrow job...");
+      await (await escrow.fundJob(prop.tokenId)).wait();
+
+      setStatus("Budget set and job funded. Now submit the deliverable.");
       await new Promise(r => setTimeout(r, 4000));
       await loadProperty(prop.tokenId.toString());
     } catch (e) { setStatus("Error: " + (e.reason || e.message)); }
     setLoading(false);
   }
 
-  // ─── Seller: Step 2 — fundJob on escrow (after setBudget) ──────
-  async function fundJob() {
-    if (!wallet.signer || !prop || !deal || !checkNetwork()) return;
-    setLoading(true);
-    setStatus("Funding ERC-8183 job via escrow...");
-    try {
-      await (await getEscrow(wallet.signer, net.escrow).fundJob(prop.tokenId)).wait();
-      setStatus("Job funded. Now submit the deliverable on ERC-8183.");
-      await new Promise(r => setTimeout(r, 4000));
-      await loadProperty(prop.tokenId.toString());
-    } catch (e) { setStatus("Error: " + (e.reason || e.message)); }
-    setLoading(false);
-  }
-
-  // ─── Seller: Step 3 — submit directly on ERC-8183 ────────────
+  // ─── Seller: Step 2 — submit directly on ERC-8183 ────────────
   async function submitDeliverable() {
     if (!wallet.signer || !prop || !deal || !checkNetwork()) return;
     setLoading(true);
@@ -296,31 +289,21 @@ export default function BuyProperty({ wallet, tokenId }) {
             </button>
           )}
 
-          {/* Seller: Step 1 — set budget on ERC-8183 (job Open=0, not yet funded) */}
+          {/* Seller: Step 1 — set budget + fund job combined (job Open=0, not yet funded) */}
           {isSeller && prop.status === 1 && deal && jobStatus === 0 && !deal.isFunded && (
-            <button onClick={setBudget} disabled={loading} style={{
+            <button onClick={setBudgetAndFund} disabled={loading} style={{
               padding: "12px", border: "none", background: "var(--charcoal)",
               color: "var(--warm-white)", borderRadius: 2,
               fontSize: 12, letterSpacing: "0.08em", textTransform: "uppercase",
               cursor: "pointer", opacity: loading ? 0.7 : 1,
             }}>
-              {loading ? "Processing..." : `Step 1 — Set Budget · ${ethers.formatUnits(prop.price, 6)} USDC`}
+              {loading
+                ? (status.startsWith("Step") ? status : "Processing...")
+                : `Step 1 — Set Budget & Fund · ${ethers.formatUnits(prop.price, 6)} USDC`}
             </button>
           )}
 
-          {/* Seller: Step 2 — fund job on escrow (after setBudget, job still Open=0) */}
-          {isSeller && prop.status === 1 && deal && jobStatus === 0 && !deal.isFunded && (
-            <button onClick={fundJob} disabled={loading} style={{
-              padding: "12px", border: "none", background: "var(--charcoal)",
-              color: "var(--warm-white)", borderRadius: 2,
-              fontSize: 12, letterSpacing: "0.08em", textTransform: "uppercase",
-              cursor: "pointer", opacity: loading ? 0.7 : 1,
-            }}>
-              {loading ? "Processing..." : "Step 2 — Fund Escrow Job"}
-            </button>
-          )}
-
-          {/* Seller: Step 3 — submit deliverable on ERC-8183 (only when job is Funded=1) */}
+          {/* Seller: Step 2 — submit deliverable on ERC-8183 (only when job is Funded=1) */}
           {isSeller && prop.status === 1 && deal && jobStatus === 1 && (
             <button onClick={submitDeliverable} disabled={loading} style={{
               padding: "12px", border: "none", background: "var(--charcoal)",
@@ -328,7 +311,7 @@ export default function BuyProperty({ wallet, tokenId }) {
               fontSize: 12, letterSpacing: "0.08em", textTransform: "uppercase",
               cursor: "pointer", opacity: loading ? 0.7 : 1,
             }}>
-              {loading ? "Processing..." : "Step 3 — Submit Deliverable"}
+              {loading ? "Processing..." : "Step 2 — Submit Deliverable"}
             </button>
           )}
 

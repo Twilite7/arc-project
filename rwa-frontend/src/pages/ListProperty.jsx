@@ -109,6 +109,22 @@ export default function ListProperty({ wallet }) {
         ? ethers.keccak256(ethers.toUtf8Bytes(form.docsFile.name + Date.now()))
         : ethers.keccak256(ethers.toUtf8Bytes("placeholder-docs-" + Date.now()));
 
+      // I check listing fee and approve registry to pull USDC if needed
+      const fee = await registry.listingFee();
+      if (fee > 0n) {
+        const usdc = new ethers.Contract(
+          reg.netConfig.usdc,
+          ["function allowance(address,address) view returns (uint256)",
+           "function approve(address,uint256) returns (bool)"],
+          wallet.signer
+        );
+        const allowance = await usdc.allowance(wallet.address, reg.REGISTRY_ADDRESS);
+        if (allowance < fee) {
+          setStatus("Approve listing fee in MetaMask...");
+          await (await usdc.approve(reg.REGISTRY_ADDRESS, fee)).wait();
+        }
+      }
+
       setStatus("Sign the property details in MetaMask...");
       const messageHash = ethers.solidityPackedKeccak256(
         ["string", "string", "string", "string", "uint256", "bytes32"],

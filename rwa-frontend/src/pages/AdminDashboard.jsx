@@ -33,6 +33,10 @@ export default function AdminDashboard({ wallet }) {
   const [jobInfo, setJobInfo]           = useState(null);
   const [status, setStatus]             = useState("");
   const [loading, setLoading]           = useState(false);
+  const [listingFeeInput, setListingFeeInput]         = useState("");
+  const [verificationFeeInput, setVerificationFeeInput] = useState("");
+  const [feeRecipientInput, setFeeRecipientInput]     = useState("");
+  const [verifyTokenId, setVerifyTokenId]             = useState("");
 
   function msg(m) { setStatus(m); }
 
@@ -41,6 +45,36 @@ export default function AdminDashboard({ wallet }) {
   }
 
   // I load ERC-8183 job info for a given token so admin can see current state
+  // I set platform fees on the registry
+  async function updateFees() {
+    if (!wallet.signer || !net) return;
+    setLoading(true); msg("Updating platform fees...");
+    try {
+      const registry = reg.getRegistry(wallet.signer);
+      const lFee = listingFeeInput ? ethers.parseUnits(listingFeeInput, 6) : 0n;
+      const vFee = verificationFeeInput ? ethers.parseUnits(verificationFeeInput, 6) : 0n;
+      const recipient = feeRecipientInput.trim() || ethers.ZeroAddress;
+      const tx = await registry.setFees(lFee, vFee, recipient);
+      await tx.wait();
+      msg(`Fees updated — Listing: ${listingFeeInput || 0} USDC, Verification: ${verificationFeeInput || 0} USDC`);
+    } catch (e) { msg("Error: " + (e.reason || e.message)); }
+    setLoading(false);
+  }
+
+  // I verify a property after reviewing off-chain documents
+  async function verifyProperty() {
+    if (!wallet.signer || !verifyTokenId) return;
+    setLoading(true); msg("Verifying property...");
+    try {
+      const registry = reg.getRegistry(wallet.signer);
+      const tx = await registry.verifyProperty(BigInt(verifyTokenId));
+      await tx.wait();
+      msg(`Token #${verifyTokenId} verified.`);
+      setVerifyTokenId("");
+    } catch (e) { msg("Error: " + (e.reason || e.message)); }
+    setLoading(false);
+  }
+
   async function loadDealInfo() {
     if (!tokenId || !wallet.provider || !net) return;
     try {
@@ -293,6 +327,53 @@ export default function AdminDashboard({ wallet }) {
               {jobInfo.jobStatus === 2 && ""}
             </p>
           )}
+        </>)}
+
+        {/* Platform Fees */}
+        {card(<>
+          {section("Platform Fees")}
+          <p style={{ fontSize: 12, color: "var(--mid)", marginBottom: 16, lineHeight: 1.6 }}>
+            Set listing and verification fees in USDC. Leave at 0 to disable.
+            Max 500 USDC per fee. Fee recipient must be set if either fee is non-zero.
+          </p>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 12 }}>
+            <div>
+              <label style={labelStyle}>Listing Fee (USDC)</label>
+              <input style={inputStyle} placeholder="0" type="number" min="0" max="500" step="0.01"
+                value={listingFeeInput} onChange={e => setListingFeeInput(e.target.value)} />
+            </div>
+            <div>
+              <label style={labelStyle}>Verification Fee (USDC)</label>
+              <input style={inputStyle} placeholder="0" type="number" min="0" max="500" step="0.01"
+                value={verificationFeeInput} onChange={e => setVerificationFeeInput(e.target.value)} />
+            </div>
+          </div>
+          <label style={labelStyle}>Fee Recipient</label>
+          <input style={{ ...inputStyle, marginBottom: 12 }} placeholder="0x..."
+            value={feeRecipientInput} onChange={e => setFeeRecipientInput(e.target.value)} />
+          <button onClick={updateFees} disabled={loading} style={{
+            padding: "10px 20px", border: "none",
+            background: "var(--charcoal)", color: "var(--warm-white)",
+            borderRadius: 2, fontSize: 12, letterSpacing: "0.06em", cursor: "pointer",
+          }}>Update Fees</button>
+        </>)}
+
+        {/* Property Verification */}
+        {card(<>
+          {section("Property Verification")}
+          <p style={{ fontSize: 12, color: "var(--mid)", marginBottom: 16, lineHeight: 1.6 }}>
+            After reviewing off-chain documents for a verification request, approve the token here.
+          </p>
+          <label style={labelStyle}>Token ID</label>
+          <input style={{ ...inputStyle, marginBottom: 12 }} placeholder="1" type="number" min="1"
+            value={verifyTokenId} onChange={e => setVerifyTokenId(e.target.value)} />
+          <button onClick={verifyProperty} disabled={loading || !verifyTokenId} style={{
+            padding: "10px 20px", border: "none",
+            background: verifyTokenId ? "var(--green)" : "var(--border)",
+            color: verifyTokenId ? "#fff" : "var(--mid)",
+            borderRadius: 2, fontSize: 12, letterSpacing: "0.06em",
+            cursor: verifyTokenId ? "pointer" : "not-allowed",
+          }}>Verify Property</button>
         </>)}
 
         {/* Emergency Controls */}
