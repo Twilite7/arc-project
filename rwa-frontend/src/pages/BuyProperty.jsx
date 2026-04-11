@@ -260,6 +260,19 @@ export default function BuyProperty({ wallet, tokenId }) {
               </div>
             )}
 
+            {/* Verification status badge */}
+            {prop.status !== 2 && (
+              <div style={{
+                marginTop: 16, padding: "10px 14px",
+                background: isVerified ? "rgba(45,106,79,0.06)" : "rgba(139,44,44,0.06)",
+                border: `1px solid ${isVerified ? "rgba(45,106,79,0.3)" : "rgba(139,44,44,0.3)"}`,
+                borderRadius: 2, fontSize: 12,
+                color: isVerified ? "var(--green)" : "var(--red)",
+              }}>
+                {isVerified ? "Verified by platform" : "Not yet verified — buyer protection pending"}
+              </div>
+            )}
+
             {prop.status === 1 && deal && (
               <div style={{ marginTop: 16, padding: "10px 14px", background: "rgba(184,151,42,0.06)", border: "1px solid rgba(184,151,42,0.3)", borderRadius: 2, fontSize: 12, color: "var(--gold)" }}>
                 In escrow — ERC-8183 job #{deal.jobId.toString()} status:{" "}

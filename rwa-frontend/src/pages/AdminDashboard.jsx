@@ -2,6 +2,12 @@ import { useState } from "react";
 import { ethers } from "ethers";
 import { useRegistry } from "../hooks/useRegistry.js";
 
+// I define ERC-8004 ValidationRegistry for admin verification responses
+const ERC8004_VALIDATION_ABI = [
+  "function validationResponse(bytes32,uint8,string,bytes32,string) external",
+  "function getValidationStatus(bytes32) view returns (address,uint256,uint8,uint8,string,uint256)",
+];
+
 // I define only the ERC-8183 functions the admin calls directly as evaluator
 const ERC8183_ABI = [
   "function complete(uint256 jobId, bytes32 reason, bytes optParams) external",
@@ -37,6 +43,7 @@ export default function AdminDashboard({ wallet }) {
   const [verificationFeeInput, setVerificationFeeInput] = useState("");
   const [feeRecipientInput, setFeeRecipientInput]     = useState("");
   const [verifyTokenId, setVerifyTokenId]             = useState("");
+  const [verifyInfo, setVerifyInfo]                   = useState(null);
 
   function msg(m) { setStatus(m); }
 
@@ -71,6 +78,54 @@ export default function AdminDashboard({ wallet }) {
       await tx.wait();
       msg(`Token #${verifyTokenId} verified.`);
       setVerifyTokenId("");
+    } catch (e) { msg("Error: " + (e.reason || e.message)); }
+    setLoading(false);
+  }
+
+  // I load ERC-8004 verification request info for a token
+  async function loadVerifyInfo() {
+    if (!verifyTokenId || !wallet.provider || !net) return;
+    try {
+      const registry = reg.getRegistry(wallet.provider);
+      const requestHash = await registry.validationRequestHashes(BigInt(verifyTokenId));
+      if (requestHash === ethers.ZeroHash) {
+        setVerifyInfo(null);
+        msg("No verification request for token #" + verifyTokenId);
+        return;
+      }
+      const validation = new ethers.Contract(net.erc8004Validation, ERC8004_VALIDATION_ABI, wallet.provider);
+      try {
+        const result = await validation.getValidationStatus(requestHash);
+        setVerifyInfo({
+          requestHash,
+          validator: result[0],
+          agentId:   result[1].toString(),
+          score:     Number(result[2]),
+          tags:      result[4],
+        });
+        msg("");
+      } catch {
+        // I handle case where request exists but no response yet
+        setVerifyInfo({ requestHash, score: -1, tags: "Pending response" });
+        msg("");
+      }
+    } catch (e) { msg("Error: " + (e.reason || e.message)); setVerifyInfo(null); }
+  }
+
+  // I approve or reject a property verification via ERC-8004
+  async function respondVerification(approve) {
+    if (!wallet.signer || !verifyInfo) return;
+    setLoading(true);
+    msg(approve ? "Approving verification..." : "Rejecting verification...");
+    try {
+      const validation = new ethers.Contract(net.erc8004Validation, ERC8004_VALIDATION_ABI, wallet.signer);
+      const score = approve ? 100 : 0;
+      const tags  = approve ? "property_verified" : "rejected";
+      await (await validation.validationResponse(
+        verifyInfo.requestHash, score, "", ethers.ZeroHash, tags
+      )).wait();
+      msg(approve ? `Token #${verifyTokenId} verified.` : `Token #${verifyTokenId} rejected.`);
+      setVerifyTokenId(""); setVerifyInfo(null);
     } catch (e) { msg("Error: " + (e.reason || e.message)); }
     setLoading(false);
   }
@@ -358,22 +413,60 @@ export default function AdminDashboard({ wallet }) {
           }}>Update Fees</button>
         </>)}
 
-        {/* Property Verification */}
+        {/* Property Verification — ERC-8004 */}
         {card(<>
-          {section("Property Verification")}
+          {section("Property Verification (ERC-8004)")}
           <p style={{ fontSize: 12, color: "var(--mid)", marginBottom: 16, lineHeight: 1.6 }}>
-            After reviewing off-chain documents for a verification request, approve the token here.
+            Load a token to see its verification request, then approve or reject via ERC-8004.
           </p>
           <label style={labelStyle}>Token ID</label>
-          <input style={{ ...inputStyle, marginBottom: 12 }} placeholder="1" type="number" min="1"
-            value={verifyTokenId} onChange={e => setVerifyTokenId(e.target.value)} />
-          <button onClick={verifyProperty} disabled={loading || !verifyTokenId} style={{
-            padding: "10px 20px", border: "none",
-            background: verifyTokenId ? "var(--green)" : "var(--border)",
-            color: verifyTokenId ? "#fff" : "var(--mid)",
-            borderRadius: 2, fontSize: 12, letterSpacing: "0.06em",
-            cursor: verifyTokenId ? "pointer" : "not-allowed",
-          }}>Verify Property</button>
+          <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
+            <input style={{ ...inputStyle, marginBottom: 0 }} placeholder="1" type="number" min="1"
+              value={verifyTokenId} onChange={e => { setVerifyTokenId(e.target.value); setVerifyInfo(null); }} />
+            <button onClick={loadVerifyInfo} disabled={loading || !verifyTokenId} style={{
+              padding: "10px 16px", border: "none", whiteSpace: "nowrap",
+              background: "var(--charcoal)", color: "var(--warm-white)",
+              borderRadius: 2, fontSize: 12, letterSpacing: "0.06em", cursor: "pointer",
+            }}>Load</button>
+          </div>
+
+          {verifyInfo && (
+            <div style={{ marginBottom: 16, padding: "12px 14px", background: "var(--cream)", borderRadius: 2, fontSize: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                {[
+                  ["Agent ID", verifyInfo.agentId || "—"],
+                  ["Current Status", verifyInfo.score === -1 ? "Pending" : verifyInfo.score > 0 ? "Verified" : "Rejected"],
+                  ["Tags", verifyInfo.tags || "—"],
+                  ["Request Hash", verifyInfo.requestHash?.slice(0,10) + "..."],
+                ].map(([k, v]) => (
+                  <div key={k}>
+                    <div style={{ fontSize: 10, color: "var(--mid)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 2 }}>{k}</div>
+                    <div style={{ fontWeight: 500 }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <button onClick={() => respondVerification(true)}
+              disabled={loading || !verifyInfo || verifyInfo.score > 0} style={{
+              padding: "10px", border: "none",
+              background: verifyInfo && verifyInfo.score <= 0 ? "var(--green)" : "var(--border)",
+              color: verifyInfo && verifyInfo.score <= 0 ? "#fff" : "var(--mid)",
+              borderRadius: 2, fontSize: 12, letterSpacing: "0.06em",
+              cursor: verifyInfo && verifyInfo.score <= 0 ? "pointer" : "not-allowed",
+            }}>Approve</button>
+            <button onClick={() => respondVerification(false)}
+              disabled={loading || !verifyInfo} style={{
+              padding: "10px",
+              border: verifyInfo ? "1px solid var(--red)" : "1px solid var(--border)",
+              background: verifyInfo ? "rgba(139,44,44,0.06)" : "transparent",
+              color: verifyInfo ? "var(--red)" : "var(--mid)",
+              borderRadius: 2, fontSize: 12, letterSpacing: "0.06em",
+              cursor: verifyInfo ? "pointer" : "not-allowed",
+            }}>Reject</button>
+          </div>
         </>)}
 
         {/* Emergency Controls */}

@@ -7,6 +7,18 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
+// I define ERC-8004 ValidationRegistry for property verification checks
+interface IERC8004Validation {
+    function getValidationStatus(bytes32 requestHash) external view returns (
+        address validator,
+        uint256 agentId,
+        uint8   score,
+        uint8   status,
+        string  memory tags,
+        uint256 timestamp
+    );
+}
+
 interface IERC8183 {
     function createJob(address,address,uint256,string calldata,address) external returns (uint256);
     function fund(uint256,bytes calldata) external;
