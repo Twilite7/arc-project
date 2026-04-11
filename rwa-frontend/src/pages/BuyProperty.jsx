@@ -9,6 +9,7 @@ const GATEWAY = "https://gateway.pinata.cloud/ipfs";
 const ERC20_ABI = [
   "function balanceOf(address) view returns (uint256)",
   "function approve(address,uint256) returns (bool)",
+  "function allowance(address,address) view returns (uint256)",
 ];
 
 // I define only the ERC-8183 functions the seller calls directly
