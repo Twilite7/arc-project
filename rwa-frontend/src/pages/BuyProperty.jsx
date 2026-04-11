@@ -44,9 +44,12 @@ export default function BuyProperty({ wallet, tokenId }) {
   const [prop, setProp]             = useState(null);
   const [deal, setDeal]             = useState(null);
   const [jobStatus, setJobStatus]   = useState(null);
+  const [isVerified, setIsVerified] = useState(false);
   const [usdcBalance, setBalance]   = useState(null);
   const [status, setStatus]         = useState("");
   const [loading, setLoading]       = useState(false);
+  const [agentIdInput, setAgentIdInput] = useState("");
+  const [docsURIInput, setDocsURIInput] = useState("");
   const [rejectionReason, setRejectionReason] = useState("");
   const [inputId, setInputId]       = useState(tokenId || "");
 
@@ -83,6 +86,12 @@ export default function BuyProperty({ wallet, tokenId }) {
         description: p.description,
         docsHash:    p.docsHash,
       });
+
+      // I check ERC-8004 verification status
+      try {
+        const verified = await registry.isVerified(tid);
+        setIsVerified(verified);
+      } catch { setIsVerified(false); }
 
       // I load active deal state and ERC-8183 job status
       try {
@@ -138,6 +147,35 @@ export default function BuyProperty({ wallet, tokenId }) {
       await (await getEscrow(wallet.signer, net.escrow).buyNow(prop.tokenId)).wait();
       setStatus("Purchase complete. The seller must now set the budget and submit the deliverable on ERC-8183.");
       await new Promise(r => setTimeout(r, 2000));
+      await loadProperty(prop.tokenId.toString());
+    } catch (e) { setStatus("Error: " + (e.reason || e.message)); }
+    setLoading(false);
+  }
+
+  // ─── Seller: Request ERC-8004 verification ──────────────────────
+  async function requestVerification() {
+    if (!wallet.signer || !prop || !checkNetwork()) return;
+    if (!agentIdInput) { setStatus("Enter your ERC-8004 Agent ID first."); return; }
+    if (!docsURIInput) { setStatus("Enter your documents IPFS URI first."); return; }
+    setLoading(true);
+    setStatus("Requesting ERC-8004 verification...");
+    try {
+      const registry = getRegistry(wallet.signer, net.registry);
+      const fee = await registry.verificationFee();
+      if (fee > 0n) {
+        const usdc = getUSDC(wallet.signer, net.usdc);
+        const allowance = await usdc.allowance(wallet.address, net.registry);
+        if (allowance < fee) {
+          setStatus("Approve verification fee...");
+          await (await usdc.approve(net.registry, fee)).wait();
+        }
+      }
+      setStatus("Submitting verification request...");
+      await (await registry.requestVerification(
+        prop.tokenId, BigInt(agentIdInput), docsURIInput
+      )).wait();
+      setStatus("Verification requested. Awaiting admin review.");
+      await new Promise(r => setTimeout(r, 4000));
       await loadProperty(prop.tokenId.toString());
     } catch (e) { setStatus("Error: " + (e.reason || e.message)); }
     setLoading(false);
@@ -285,6 +323,36 @@ export default function BuyProperty({ wallet, tokenId }) {
 
       {prop && (
         <div style={{ display: "grid", gap: 12 }}>
+
+          {/* Seller: request ERC-8004 verification when not yet verified */}
+          {isSeller && prop.status === 0 && !isVerified && (
+            <div style={{ display: "grid", gap: 10 }}>
+              <input
+                style={{ padding: "10px 14px", border: "1px solid var(--border)", borderRadius: 2, background: "var(--warm-white)", fontSize: 13, outline: "none" }}
+                placeholder="Your ERC-8004 Agent ID (e.g. 1834)"
+                value={agentIdInput}
+                onChange={e => setAgentIdInput(e.target.value)}
+              />
+              <input
+                style={{ padding: "10px 14px", border: "1px solid var(--border)", borderRadius: 2, background: "var(--warm-white)", fontSize: 13, outline: "none" }}
+                placeholder="Property docs IPFS URI (ipfs://...)"
+                value={docsURIInput}
+                onChange={e => setDocsURIInput(e.target.value)}
+              />
+              <button onClick={requestVerification} disabled={loading} style={{
+                padding: "12px", border: "1px solid var(--gold)",
+                background: "transparent", color: "var(--gold)",
+                borderRadius: 2, fontSize: 12, letterSpacing: "0.08em",
+                textTransform: "uppercase", cursor: "pointer",
+                opacity: loading ? 0.7 : 1,
+              }}>
+                {loading ? "Processing..." : "Request Platform Verification"}
+              </button>
+              <p style={{ fontSize: 11, color: "var(--mid)", textAlign: "center", margin: 0 }}>
+                Buyers cannot purchase until this property is verified.
+              </p>
+            </div>
+          )}
 
           {/* Buyer: buy now */}
           {!isSeller && prop.status === 0 && (

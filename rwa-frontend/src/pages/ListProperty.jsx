@@ -57,6 +57,26 @@ export default function ListProperty({ wallet }) {
   const [preview, setPreview] = useState(null);
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
+  const [fees, setFees] = useState({ listing: null, verification: null });
+
+  // I load current platform fees on mount
+  useEffect(() => {
+    async function loadFees() {
+      if (!wallet.provider || !reg.netConfig) return;
+      try {
+        const registry = reg.getRegistry(wallet.provider);
+        const [lf, vf] = await Promise.all([
+          registry.listingFee(),
+          registry.verificationFee(),
+        ]);
+        setFees({
+          listing:      lf,
+          verification: vf,
+        });
+      } catch {}
+    }
+    loadFees();
+  }, [wallet.provider, reg.netConfig?.registry]);
 
   function set(k, v) { setForm(f => ({ ...f, [k]: v })); }
 
@@ -232,6 +252,25 @@ export default function ListProperty({ wallet }) {
           <input type="file" style={{ fontSize: 12, color: "var(--mid)" }}
             onChange={e => set("docsFile", e.target.files[0])} />
         </div>
+
+        {/* Platform fee notice */}
+        {(fees.listing > 0n || fees.verification > 0n) && (
+          <div style={{
+            padding: "12px 16px", borderRadius: 2, fontSize: 12,
+            background: "rgba(184,151,42,0.06)",
+            border: "1px solid rgba(184,151,42,0.3)",
+            color: "var(--gold)",
+          }}>
+            {fees.listing > 0n && (
+              <div>Listing fee: <strong>{ethers.formatUnits(fees.listing, 6)} USDC</strong> — charged on submission</div>
+            )}
+            {fees.verification > 0n && (
+              <div style={{ marginTop: fees.listing > 0n ? 4 : 0 }}>
+                Verification fee: <strong>{ethers.formatUnits(fees.verification, 6)} USDC</strong> — charged when requesting verification
+              </div>
+            )}
+          </div>
+        )}
 
         <button onClick={handleSubmit} disabled={loading} style={{
           padding: "14px", border: "none",
