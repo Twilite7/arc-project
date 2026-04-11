@@ -2,6 +2,12 @@ import { useState, useEffect } from "react";
 import { ethers } from "ethers";
 import { useRegistry } from "../hooks/useRegistry.js";
 
+const ERC8004_IDENTITY_ABI = [
+  "function register(string) external returns (uint256)",
+  "function ownerOf(uint256) view returns (address)",
+  "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
+];
+
 const PINATA_JWT = import.meta.env.VITE_PINATA_JWT;
 
 const inputStyle = {
@@ -58,6 +64,8 @@ export default function ListProperty({ wallet }) {
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
   const [fees, setFees] = useState({ listing: null, verification: null });
+  const [agentId, setAgentId] = useState(null);
+  const [agentIdLoading, setAgentIdLoading] = useState(false);
 
   // I load current platform fees on mount
   useEffect(() => {
@@ -77,6 +85,49 @@ export default function ListProperty({ wallet }) {
     }
     loadFees();
   }, [wallet.provider, reg.netConfig?.registry]);
+
+  // I check if the connected wallet already has an ERC-8004 identity
+  useEffect(() => {
+    async function checkAgentId() {
+      if (!wallet.provider || !wallet.address || !reg.netConfig) return;
+      try {
+        // I scan recent Transfer events on IdentityRegistry to find seller's agentId
+        const identity = new ethers.Contract(
+          reg.netConfig.erc8004Identity, ERC8004_IDENTITY_ABI, wallet.provider
+        );
+        const currentBlock = await wallet.provider.getBlockNumber();
+        const fromBlock = Math.max(0, currentBlock - 9000);
+        const events = await identity.queryFilter(
+          identity.filters.Transfer(null, wallet.address), fromBlock, currentBlock
+        );
+        if (events.length > 0) {
+          const latest = events[events.length - 1];
+          setAgentId(latest.topics[3] ? BigInt(latest.topics[3]).toString() : null);
+        }
+      } catch {}
+    }
+    checkAgentId();
+  }, [wallet.address, wallet.provider, reg.netConfig?.erc8004Identity]);
+
+  // I let the seller register an ERC-8004 identity in one click
+  async function registerIdentity() {
+    if (!wallet.signer) { setStatus("Connect wallet first."); return; }
+    setAgentIdLoading(true);
+    setStatus("Registering ERC-8004 identity...");
+    try {
+      const identity = new ethers.Contract(
+        reg.netConfig.erc8004Identity, ERC8004_IDENTITY_ABI, wallet.signer
+      );
+      const tx = await identity.register(
+        "ipfs://bafkreibdi6623n3xpf7ymk62ckb4bo75o3qemwkpfvp5i25j66itxvsoei"
+      );
+      const receipt = await tx.wait();
+      const newAgentId = BigInt(receipt.logs[0].topics[3]).toString();
+      setAgentId(newAgentId);
+      setStatus("Identity registered. Your Agent ID: " + newAgentId);
+    } catch (e) { setStatus("Error: " + (e.reason || e.message)); }
+    setAgentIdLoading(false);
+  }
 
   function set(k, v) { setForm(f => ({ ...f, [k]: v })); }
 
@@ -176,6 +227,39 @@ export default function ListProperty({ wallet }) {
           Verified Listers Only
         </p>
         <h1 style={{ fontSize: 48, fontWeight: 300 }}>List an Asset</h1>
+      </div>
+
+      {/* ERC-8004 Identity */}
+      <div style={{
+        marginBottom: 28, padding: "16px 20px",
+        background: "var(--warm-white)", border: "1px solid var(--border)",
+        borderRadius: 4,
+      }}>
+        <div style={{ fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--gold)", marginBottom: 12 }}>
+          ERC-8004 Identity
+        </div>
+        {agentId ? (
+          <div style={{ fontSize: 13 }}>
+            Your Agent ID: <strong style={{ color: "var(--green)" }}>#{agentId}</strong>
+            <span style={{ fontSize: 11, color: "var(--mid)", marginLeft: 8 }}>
+              — use this when requesting property verification
+            </span>
+          </div>
+        ) : (
+          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+            <span style={{ fontSize: 12, color: "var(--mid)" }}>
+              No identity registered. Register once to enable property verification.
+            </span>
+            <button onClick={registerIdentity} disabled={agentIdLoading} style={{
+              padding: "8px 16px", border: "none", whiteSpace: "nowrap",
+              background: "var(--charcoal)", color: "var(--warm-white)",
+              borderRadius: 2, fontSize: 11, letterSpacing: "0.06em",
+              cursor: "pointer", opacity: agentIdLoading ? 0.7 : 1,
+            }}>
+              {agentIdLoading ? "Registering..." : "Register Identity"}
+            </button>
+          </div>
+        )}
       </div>
 
       <div style={{ display: "grid", gap: 20 }}>
