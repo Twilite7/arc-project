@@ -87,6 +87,7 @@ export function useRegistry(signer, provider, chainId) {
   return {
     properties, loading, fetchProperties,
     getRegistry, getEscrow,
+    netConfig,
     REGISTRY_ADDRESS: netConfig?.registry,
     ESCROW_ADDRESS:   netConfig?.escrow,
   };
