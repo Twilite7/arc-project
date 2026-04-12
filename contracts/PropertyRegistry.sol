@@ -222,21 +222,29 @@ contract PropertyRegistry is ERC721, Ownable2Step, Pausable {
 
     // I let the seller request property verification via ERC-8004 ValidationRegistry.
     // Seller must have registered an ERC-8004 identity (agentId) beforehand.
-    // Platform admin responds on ERC-8004 directly with validationResponse().
-    // requestHash is deterministic: keccak256(tokenId, seller, docsHash)
-    // so the escrow can verify without storing extra state.
-    function requestVerification(
+    // Flow:
+    //   1. Seller calls ERC-8004 validationRequest(admin, agentId, docsURI, requestHash) directly
+    //   2. Seller calls recordValidationRequest() here to store the hash on-chain
+    //   3. Admin calls ERC-8004 validationResponse() directly to approve or reject
+    //   4. buyNow checks isVerified() which reads stored hash from ERC-8004
+    function recordValidationRequest(
         uint256 tokenId,
-        uint256 agentId,
-        string calldata docsURI
+        bytes32 requestHash
     ) external tokenExists(tokenId) {
         require(ownerOf(tokenId) == msg.sender, "Only property owner");
+        require(requestHash != bytes32(0),       "Invalid request hash");
 
-        bytes32 requestHash = keccak256(
-            abi.encodePacked(tokenId, msg.sender, properties[tokenId].docsHash)
-        );
+        // I verify this hash exists in ERC-8004 and was submitted to our platform admin
+        // This prevents sellers recording fake or unrelated validation hashes
+        try IERC8004Validation(VALIDATION_REGISTRY).getValidationStatus(requestHash)
+            returns (address validator, uint256, uint8, uint8, string memory, uint256)
+        {
+            require(validator == owner(), "Validator must be platform admin");
+        } catch {
+            revert("Request hash not found in ERC-8004");
+        }
 
-        // I allow re-verification if previous attempt was rejected (score == 0)
+        // I allow re-verification only if previous attempt was rejected (score == 0)
         bytes32 existing = validationRequestHashes[tokenId];
         if (existing != bytes32(0)) {
             try IERC8004Validation(VALIDATION_REGISTRY).getValidationStatus(existing)
@@ -244,7 +252,7 @@ contract PropertyRegistry is ERC721, Ownable2Step, Pausable {
             {
                 require(score == 0, "Already verified or pending");
             } catch {
-                // I allow re-request if previous hash has no status (unexpected state)
+                // I allow re-record if ERC-8004 has no status for the existing hash
             }
         }
 
@@ -253,14 +261,6 @@ contract PropertyRegistry is ERC721, Ownable2Step, Pausable {
             require(feeRecipient != address(0), "Fee recipient not set");
             IERC20(USDC).safeTransferFrom(msg.sender, feeRecipient, verificationFee);
         }
-
-        // I submit the validation request to ERC-8004
-        IERC8004Validation(VALIDATION_REGISTRY).validationRequest(
-            owner(),      // validator = platform admin (owner)
-            agentId,
-            docsURI,
-            requestHash
-        );
 
         validationRequestHashes[tokenId] = requestHash;
         emit VerificationRequested(tokenId, msg.sender, requestHash);

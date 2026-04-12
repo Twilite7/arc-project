@@ -153,28 +153,46 @@ export default function BuyProperty({ wallet, tokenId }) {
     setLoading(false);
   }
 
-  // ─── Seller: Request ERC-8004 verification ──────────────────────
+  // ─── Seller: Request ERC-8004 verification (two steps) ──────────
+  // Step 1: seller calls validationRequest directly on ERC-8004 as agent owner
+  // Step 2: seller calls recordValidationRequest on our registry to store the hash
   async function requestVerification() {
     if (!wallet.signer || !prop || !checkNetwork()) return;
     if (!agentIdInput) { setStatus("Enter your ERC-8004 Agent ID first."); return; }
     if (!docsURIInput) { setStatus("Enter your documents IPFS URI first."); return; }
     setLoading(true);
-    setStatus("Requesting ERC-8004 verification...");
     try {
-      const registry = getRegistry(wallet.signer, net.registry);
-      const fee = await registry.verificationFee();
+      const erc8004Validation = new ethers.Contract(net.erc8004Validation, [
+        "function validationRequest(address,uint256,string,bytes32) external",
+      ], wallet.signer);
+      const registryRead  = getRegistry(wallet.provider, net.registry);
+      const registryWrite = getRegistry(wallet.signer, net.registry);
+      const platformAdmin = await registryRead.owner();
+      const requestHash   = ethers.keccak256(
+        ethers.AbiCoder.defaultAbiCoder().encode(
+          ["uint256", "address", "string"],
+          [prop.tokenId, wallet.address, docsURIInput]
+        )
+      );
+
+      setStatus("Step 1/3 — Submit to ERC-8004...");
+      await (await erc8004Validation.validationRequest(
+        platformAdmin, BigInt(agentIdInput), docsURIInput, requestHash
+      )).wait();
+
+      const fee = await registryRead.verificationFee();
       if (fee > 0n) {
         const usdc = getUSDC(wallet.signer, net.usdc);
         const allowance = await usdc.allowance(wallet.address, net.registry);
         if (allowance < fee) {
-          setStatus("Approve verification fee...");
+          setStatus("Step 2/3 — Approve verification fee...");
           await (await usdc.approve(net.registry, fee)).wait();
         }
       }
-      setStatus("Submitting verification request...");
-      await (await registry.requestVerification(
-        prop.tokenId, BigInt(agentIdInput), docsURIInput
-      )).wait();
+
+      setStatus("Step 3/3 — Record on registry...");
+      await (await registryWrite.recordValidationRequest(prop.tokenId, requestHash)).wait();
+
       setStatus("Verification requested. Awaiting admin review.");
       await new Promise(r => setTimeout(r, 4000));
       await loadProperty(prop.tokenId.toString());
@@ -182,7 +200,7 @@ export default function BuyProperty({ wallet, tokenId }) {
     setLoading(false);
   }
 
-  // ─── Seller: Step 1 — setBudget + fundJob combined ──────────────
+    // ─── Seller: Step 1 — setBudget + fundJob combined ──────────────
   // I combine both into one sequential flow so seller signs two txns back to back
   async function setBudgetAndFund() {
     if (!wallet.signer || !prop || !deal || !checkNetwork()) return;
