@@ -227,6 +227,10 @@ contract PropertyRegistry is ERC721, Ownable2Step, Pausable {
     //   2. Seller calls recordValidationRequest() here to store the hash on-chain
     //   3. Admin calls ERC-8004 validationResponse() directly to approve or reject
     //   4. buyNow checks isVerified() which reads stored hash from ERC-8004
+    // The requestHash MUST be keccak256(tokenId, seller, docsHash) — derived from
+    // the immutable docsHash committed at listProperty time, not a mutable URI.
+    // This binds each validation to specific documents for a specific property,
+    // preventing reuse of an approval across different listings.
     function recordValidationRequest(
         uint256 tokenId,
         bytes32 requestHash
@@ -234,8 +238,14 @@ contract PropertyRegistry is ERC721, Ownable2Step, Pausable {
         require(ownerOf(tokenId) == msg.sender, "Only property owner");
         require(requestHash != bytes32(0),       "Invalid request hash");
 
+        // I enforce the canonical hash formula using the on-chain docsHash
+        // Seller cannot forge this because docsHash was committed at listProperty
+        bytes32 expected = keccak256(
+            abi.encodePacked(tokenId, msg.sender, properties[tokenId].docsHash)
+        );
+        require(requestHash == expected, "Hash must encode tokenId, seller, and docsHash");
+
         // I verify this hash exists in ERC-8004 and was submitted to our platform admin
-        // This prevents sellers recording fake or unrelated validation hashes
         try IERC8004Validation(VALIDATION_REGISTRY).getValidationStatus(requestHash)
             returns (address validator, uint256, uint8, uint8, string memory, uint256)
         {

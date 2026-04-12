@@ -168,11 +168,11 @@ export default function BuyProperty({ wallet, tokenId }) {
       const registryRead  = getRegistry(wallet.provider, net.registry);
       const registryWrite = getRegistry(wallet.signer, net.registry);
       const platformAdmin = await registryRead.owner();
-      const requestHash   = ethers.keccak256(
-        ethers.AbiCoder.defaultAbiCoder().encode(
-          ["uint256", "address", "string"],
-          [prop.tokenId, wallet.address, docsURIInput]
-        )
+      // I compute hash from the immutable on-chain docsHash, not the mutable URI
+      // This matches the formula enforced by recordValidationRequest in the registry
+      const requestHash = ethers.solidityPackedKeccak256(
+        ["uint256", "address", "bytes32"],
+        [prop.tokenId, wallet.address, prop.docsHash]
       );
 
       setStatus("Step 1/3 — Submit to ERC-8004...");
