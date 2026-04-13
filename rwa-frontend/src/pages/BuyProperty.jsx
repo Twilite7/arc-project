@@ -311,7 +311,7 @@ export default function BuyProperty({ wallet, tokenId }) {
               </div>
             )}
 
-            {rejectionReason && prop.status === 0 && (
+            {rejectionReason && (
               <div style={{ marginTop: 16, padding: "10px 14px", background: "rgba(139,44,44,0.06)", border: "1px solid rgba(139,44,44,0.3)", borderRadius: 2, fontSize: 12, color: "var(--red)" }}>
                 <strong>Last deal rejected</strong> — {rejectionReason}
               </div>

@@ -1,9 +1,10 @@
 export default function Navbar({ page, setPage, wallet, darkMode, setDarkMode }) {
   const tabs = [
-    { id: "browse", label: "Properties" },
-    { id: "list",   label: "List Asset" },
-    { id: "buy",    label: "Acquire" },
-    { id: "admin",  label: "Admin" },
+    { id: "browse",   label: "Properties" },
+    { id: "list",     label: "List Asset" },
+    { id: "buy",      label: "Acquire" },
+    { id: "admin",    label: "Admin" },
+    { id: "profile",  label: "Profile" },
   ];
 
   return (
@@ -76,12 +77,15 @@ export default function Navbar({ page, setPage, wallet, darkMode, setDarkMode })
             }}>Connect Wallet</button>
           ) : (
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{
+              <button onClick={() => setPage("profile")} style={{
                 fontSize: 12, color: "var(--mid)",
                 fontFamily: "monospace",
+                background: "transparent", border: "none",
+                cursor: "pointer", padding: 0,
+                textDecoration: page === "profile" ? "underline" : "none",
               }}>
                 {wallet.address.slice(0,6)}...{wallet.address.slice(-4)}
-              </span>
+              </button>
               <button onClick={wallet.disconnect} style={{
                 padding: "6px 12px",
                 background: "transparent",

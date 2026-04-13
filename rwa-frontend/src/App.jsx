@@ -4,6 +4,7 @@ import Browse from "./pages/Browse.jsx";
 import ListProperty from "./pages/ListProperty.jsx";
 import BuyProperty from "./pages/BuyProperty.jsx";
 import AdminDashboard from "./pages/AdminDashboard.jsx";
+import Profile from "./pages/Profile.jsx";
 import { useWallet } from "./hooks/useWallet.js";
 
 export default function App() {
@@ -25,6 +26,7 @@ export default function App() {
         {page === "list"    && <ListProperty wallet={wallet} />}
         {page === "buy"     && <BuyProperty wallet={wallet} tokenId={selectedTokenId} />}
         {page === "admin"   && <AdminDashboard wallet={wallet} />}
+        {page === "profile" && <Profile wallet={wallet} />}
       </main>
     </div>
   );

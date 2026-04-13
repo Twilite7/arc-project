@@ -61,6 +61,7 @@ interface IPropertyRegistry {
     function ownerOf(uint256 tokenId) external view returns (address);
     function updateStatus(uint256 tokenId, uint8 status) external;
     function transferProperty(uint256 tokenId, address from, address to) external;
+    function isVerified(uint256 tokenId) external view returns (bool);
 }
 
 // Security assumptions:
@@ -111,6 +112,7 @@ contract PropertyEscrow8183 is Ownable, Pausable, ReentrancyGuard {
         require(status == 0,                     "Property not available");
         require(seller != msg.sender,            "Seller cannot buy own property");
         require(price > 0 && price <= MAX_PRICE, "Invalid price");
+        require(registry.isVerified(tokenId),    "Property not verified by platform");
 
         // I pull USDC from buyer — held here until fundJob or rejectDeal
         IERC20(USDC).safeTransferFrom(msg.sender, address(this), price);

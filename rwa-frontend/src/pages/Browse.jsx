@@ -2,7 +2,7 @@ import { useRegistry } from "../hooks/useRegistry.js";
 import PropertyCard from "../components/PropertyCard.jsx";
 
 export default function Browse({ wallet, onBuy }) {
-  const reg = useRegistry(wallet.signer, wallet.provider, wallet.chainId);
+  const { properties, loading, forceRefresh } = useRegistry(wallet.signer, wallet.provider, wallet.chainId);
 
   return (
     <div>
@@ -20,16 +20,16 @@ export default function Browse({ wallet, onBuy }) {
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
         <span style={{ fontSize: 13, color: "var(--mid)" }}>
-          {reg.loading ? "Loading..." : `${reg.properties.length} properties`}
+          {loading ? "Loading..." : `${properties.length} properties`}
         </span>
-        <button onClick={reg.fetchProperties} style={{
+        <button onClick={forceRefresh} style={{
           padding: "6px 14px", border: "1px solid var(--border)",
           background: "transparent", borderRadius: 2, fontSize: 12, color: "var(--mid)",
           cursor: "pointer",
         }}>Refresh</button>
       </div>
 
-      {reg.properties.length === 0 && !reg.loading && (
+      {properties.length === 0 && !loading && (
         <div style={{
           padding: "40px", textAlign: "center",
           border: "1px dashed var(--border)", borderRadius: 4, color: "var(--mid)",
@@ -43,7 +43,7 @@ export default function Browse({ wallet, onBuy }) {
         gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
         gap: 24,
       }}>
-        {reg.properties.map(prop => (
+        {properties.map(prop => (
           <PropertyCard key={prop.tokenId} prop={prop} onBuy={onBuy} />
         ))}
       </div>

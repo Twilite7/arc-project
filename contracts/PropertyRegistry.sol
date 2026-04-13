@@ -62,6 +62,8 @@ contract PropertyRegistry is ERC721, Ownable2Step, Pausable {
     // I store ERC-8004 validation request hashes per token
     // This is the key linking a property to its ERC-8004 validation
     mapping(uint256 => bytes32) public validationRequestHashes;
+    // I prevent the same documents from being listed twice
+    mapping(bytes32 => bool) public usedDocsHashes;
 
     address public escrowContract;
     bool public escrowLocked;
@@ -186,6 +188,8 @@ contract PropertyRegistry is ERC721, Ownable2Step, Pausable {
                 bytes(size).length <= 50,           "Invalid size length");
         require(bytes(description).length <= 1000, "Description too long");
         require(docsHash != bytes32(0),             "Docs hash required");
+        require(!usedDocsHashes[docsHash],           "Documents already used in another listing");
+        require(sellerSig.length == 65,              "Seller signature required");
 
         bytes32 messageHash = keccak256(abi.encodePacked(
             location, latitude, longitude, size, price, docsHash
@@ -208,6 +212,7 @@ contract PropertyRegistry is ERC721, Ownable2Step, Pausable {
         properties[tokenId].status      = Status.Available;
 
         _safeMint(msg.sender, tokenId);
+        usedDocsHashes[docsHash] = true;
 
         // I collect listing fee after minting — 0 by default
         if (listingFee > 0) {
