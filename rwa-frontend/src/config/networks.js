@@ -2,8 +2,8 @@
 export const NETWORKS = {
   5042002: {
     name:              "Arc Testnet",
-    registry:          "0x6538b6E36b4Ff9fe36Ea300fD173b4dAc8E2DbCB",
-    escrow:            "0xC42072C43C86C3bA625D6eF9771fB59B827B35dd",
+    registry:          "0xB729E2d854FAfF042236eb1D6039dd0495843982",
+    escrow:            "0x47B98EC974ab77a27F04723DAC8036535132FC15",
     usdc:              "0x3600000000000000000000000000000000000000",
     erc8183:           "0x0747EEf0706327138c69792bF28Cd525089e4583",
     erc8004Identity:   "0x8004A818BFB912233c491871b3d84c89A494BD9e",

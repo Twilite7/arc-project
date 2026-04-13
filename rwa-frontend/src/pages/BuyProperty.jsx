@@ -191,7 +191,9 @@ export default function BuyProperty({ wallet, tokenId }) {
       }
 
       setStatus("Step 3/3 — Record on registry...");
-      await (await registryWrite.recordValidationRequest(prop.tokenId, requestHash)).wait();
+      await (await registryWrite.recordValidationRequest(
+        prop.tokenId, BigInt(agentIdInput), requestHash
+      )).wait();
 
       setStatus("Verification requested. Awaiting admin review.");
       await new Promise(r => setTimeout(r, 4000));

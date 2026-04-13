@@ -28,6 +28,10 @@ interface IERC8004Validation {
     );
 }
 
+interface IERC8004Identity {
+    function ownerOf(uint256 agentId) external view returns (address);
+}
+
 contract PropertyRegistry is ERC721, Ownable2Step, Pausable {
 
     using ECDSA for bytes32;
@@ -35,8 +39,9 @@ contract PropertyRegistry is ERC721, Ownable2Step, Pausable {
 
     // I use Arc native USDC for all platform fees
     address public constant USDC = 0x3600000000000000000000000000000000000000;
-    // I point to ERC-8004 ValidationRegistry on Arc Testnet
+    // I point to ERC-8004 ValidationRegistry and IdentityRegistry on Arc Testnet
     address public constant VALIDATION_REGISTRY = 0x8004Cb1BF31DAf7788923b405b754f57acEB4272;
+    address public constant IDENTITY_REGISTRY   = 0x8004A818BFB912233c491871b3d84c89A494BD9e;
     // I cap fees at 500 USDC to prevent admin griefing listers
     uint256 public constant MAX_FEE = 500 * 1e6;
 
@@ -238,10 +243,17 @@ contract PropertyRegistry is ERC721, Ownable2Step, Pausable {
     // preventing reuse of an approval across different listings.
     function recordValidationRequest(
         uint256 tokenId,
+        uint256 agentId,
         bytes32 requestHash
     ) external tokenExists(tokenId) {
         require(ownerOf(tokenId) == msg.sender, "Only property owner");
         require(requestHash != bytes32(0),       "Invalid request hash");
+
+        // I verify the agentId is owned by the seller — prevents using someone else's identity
+        require(
+            IERC8004Identity(IDENTITY_REGISTRY).ownerOf(agentId) == msg.sender,
+            "Agent ID not owned by seller"
+        );
 
         // I enforce the canonical hash formula using the on-chain docsHash
         // Seller cannot forge this because docsHash was committed at listProperty
@@ -251,10 +263,12 @@ contract PropertyRegistry is ERC721, Ownable2Step, Pausable {
         require(requestHash == expected, "Hash must encode tokenId, seller, and docsHash");
 
         // I verify this hash exists in ERC-8004 and was submitted to our platform admin
+        // and that the agentId in the request matches the seller's agent
         try IERC8004Validation(VALIDATION_REGISTRY).getValidationStatus(requestHash)
-            returns (address validator, uint256, uint8, uint8, string memory, uint256)
+            returns (address validator, uint256 requestAgentId, uint8, uint8, string memory, uint256)
         {
-            require(validator == owner(), "Validator must be platform admin");
+            require(validator == owner(),       "Validator must be platform admin");
+            require(requestAgentId == agentId,  "Agent ID mismatch in ERC-8004 request");
         } catch {
             revert("Request hash not found in ERC-8004");
         }
