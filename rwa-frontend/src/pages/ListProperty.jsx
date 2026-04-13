@@ -87,22 +87,34 @@ export default function ListProperty({ wallet }) {
   }, [wallet.provider, reg.netConfig?.registry]);
 
   // I check if the connected wallet already has an ERC-8004 identity
+  // I scan all blocks in chunks since registration could have happened long ago
   useEffect(() => {
     async function checkAgentId() {
       if (!wallet.provider || !wallet.address || !reg.netConfig) return;
       try {
-        // I scan recent Transfer events on IdentityRegistry to find seller's agentId
         const identity = new ethers.Contract(
           reg.netConfig.erc8004Identity, ERC8004_IDENTITY_ABI, wallet.provider
         );
         const currentBlock = await wallet.provider.getBlockNumber();
-        const fromBlock = Math.max(0, currentBlock - 9000);
-        const events = await identity.queryFilter(
-          identity.filters.Transfer(null, wallet.address), fromBlock, currentBlock
-        );
-        if (events.length > 0) {
-          const latest = events[events.length - 1];
-          setAgentId(latest.topics[3] ? BigInt(latest.topics[3]).toString() : null);
+        const CHUNK = 9000;
+        // I scan from block 0 in chunks to find any identity ever registered
+        for (let from = 0; from <= currentBlock; from += CHUNK) {
+          const to = Math.min(from + CHUNK - 1, currentBlock);
+          try {
+            const events = await identity.queryFilter(
+              identity.filters.Transfer(
+                "0x0000000000000000000000000000000000000000",
+                wallet.address
+              ), from, to
+            );
+            if (events.length > 0) {
+              // I take the most recent registration
+              const latest = events[events.length - 1];
+              const tokenId = latest.args?.[2] ?? BigInt(latest.topics[3]);
+              setAgentId(tokenId.toString());
+              return; // I stop scanning once found
+            }
+          } catch {}
         }
       } catch {}
     }
