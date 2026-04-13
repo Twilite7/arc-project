@@ -58,7 +58,7 @@ export default function ListProperty({ wallet }) {
   const [form, setForm] = useState({
     location: "", latitude: "", longitude: "",
     size: "", price: "", description: "",
-    imageFile: null, docsFile: null,
+    imageFile: null, docsFile: null, docsIpfsCid: null,
   });
   const [preview, setPreview] = useState(null);
   const [status, setStatus] = useState("");
@@ -165,6 +165,23 @@ export default function ListProperty({ wallet }) {
 
   function set(k, v) { setForm(f => ({ ...f, [k]: v })); }
 
+  async function handleDocsChange(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const allowed = ["application/pdf", "image/jpeg", "image/png"];
+    if (!allowed.includes(file.type)) {
+      setStatus("Only PDF, JPG, or PNG documents are accepted.");
+      return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+      setStatus("Document must be under 20MB.");
+      return;
+    }
+    set("docsFile", file);
+    set("docsIpfsCid", null); // I reset CID when file changes
+    setStatus("");
+  }
+
   function handleImageChange(e) {
     const file = e.target.files[0];
     if (!file) return;
@@ -210,9 +227,27 @@ export default function ListProperty({ wallet }) {
       });
 
       const price = ethers.parseUnits(form.price, 6);
-      const docsHash = form.docsFile
-        ? ethers.keccak256(ethers.toUtf8Bytes(form.docsFile.name + Date.now()))
-        : ethers.keccak256(ethers.toUtf8Bytes("placeholder-docs-" + Date.now()));
+      // I require an actual document file — no placeholder hashes
+      if (!form.docsFile) {
+        setStatus("Please upload your property documents (title deed, survey, or C of O).");
+        setLoading(false);
+        return;
+      }
+
+      // I hash the actual file bytes — this is the binding commitment stored on-chain
+      setStatus("Hashing document...");
+      const docsArrayBuffer = await form.docsFile.arrayBuffer();
+      const docsBytes       = new Uint8Array(docsArrayBuffer);
+      const docsHash        = ethers.keccak256(docsBytes);
+
+      // I upload docs to IPFS so the URI is available for verification requests
+      setStatus("Uploading documents to IPFS...");
+      let docsCid = form.docsIpfsCid;
+      if (!docsCid) {
+        docsCid = await uploadToPinata(form.docsFile);
+        set("docsIpfsCid", docsCid);
+      }
+      const docsURI = `ipfs://${docsCid}`;
 
       // I check listing fee and approve registry to pull USDC if needed
       const fee = await registry.listingFee();
@@ -244,9 +279,12 @@ export default function ListProperty({ wallet }) {
       );
       await tx.wait();
 
-      setStatus("Property listed successfully!");
+      setStatus("Property listed successfully! Token ID: " + tokenId.toString());
+      try {
+        localStorage.setItem(`zeno_docsURI_${tokenId.toString()}`, docsURI);
+      } catch {}
       if (preview) URL.revokeObjectURL(preview);
-      setForm({ location: "", latitude: "", longitude: "", size: "", price: "", description: "", imageFile: null, docsFile: null });
+      setForm({ location: "", latitude: "", longitude: "", size: "", price: "", description: "", imageFile: null, docsFile: null, docsIpfsCid: null });
       setPreview(null);
     } catch (e) {
       setStatus("Error: " + (e.reason || e.message));
@@ -366,9 +404,15 @@ export default function ListProperty({ wallet }) {
         </div>
 
         <div>
-          <label style={labelStyle}>Legal Documents (optional)</label>
-          <input type="file" style={{ fontSize: 12, color: "var(--mid)" }}
-            onChange={e => set("docsFile", e.target.files[0])} />
+          <label style={labelStyle}>Legal Documents * (PDF, JPG, or PNG — max 20MB)</label>
+          <input type="file" accept=".pdf,.jpg,.jpeg,.png"
+            style={{ fontSize: 12, color: "var(--mid)" }}
+            onChange={handleDocsChange} />
+          {form.docsFile && (
+            <div style={{ fontSize: 11, color: "var(--green)", marginTop: 4 }}>
+              {form.docsFile.name} — ready to hash and upload
+            </div>
+          )}
         </div>
 
         {/* Platform fee notice */}

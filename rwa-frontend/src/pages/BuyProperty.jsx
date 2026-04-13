@@ -94,6 +94,12 @@ export default function BuyProperty({ wallet, tokenId }) {
         setIsVerified(verified);
       } catch { setIsVerified(false); }
 
+      // I auto-populate docsURI from localStorage if seller listed this property
+      try {
+        const savedURI = localStorage.getItem(`zeno_docsURI_${tid.toString()}`);
+        if (savedURI) setDocsURIInput(savedURI);
+      } catch {}
+
       // I load active deal state and ERC-8183 job status
       try {
         const active = await escrow.activeDeal(tid);
@@ -356,7 +362,7 @@ export default function BuyProperty({ wallet, tokenId }) {
               />
               <input
                 style={{ padding: "10px 14px", border: "1px solid var(--border)", borderRadius: 2, background: "var(--warm-white)", fontSize: 13, outline: "none" }}
-                placeholder="Property docs IPFS URI (ipfs://...)"
+                placeholder="Auto-filled from listing (or paste ipfs://...)"
                 value={docsURIInput}
                 onChange={e => setDocsURIInput(e.target.value)}
               />
