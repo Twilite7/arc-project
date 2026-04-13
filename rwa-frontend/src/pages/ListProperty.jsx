@@ -273,15 +273,25 @@ export default function ListProperty({ wallet }) {
       const sellerSig = await wallet.signer.signMessage(ethers.getBytes(messageHash));
 
       setStatus("Submitting transaction...");
-      const tx = await registry.listProperty(
+      const tx      = await registry.listProperty(
         form.location, form.latitude, form.longitude,
         form.size, price, descPayload, docsHash, sellerSig
       );
-      await tx.wait();
-
-      setStatus("Property listed successfully! Token ID: " + tokenId.toString());
+      const receipt = await tx.wait();
+      // I extract tokenId from the PropertyListed event
+      const iface = new ethers.Interface([
+        "event PropertyListed(uint256 indexed tokenId, address indexed seller, string location)"
+      ]);
+      let tokenId = null;
+      for (const log of receipt.logs) {
+        try {
+          const parsed = iface.parseLog(log);
+          if (parsed) { tokenId = parsed.args.tokenId; break; }
+        } catch {}
+      }
+      setStatus("Property listed successfully!" + (tokenId ? " Token ID: " + tokenId.toString() : ""));
       try {
-        localStorage.setItem(`zeno_docsURI_${tokenId.toString()}`, docsURI);
+        if (tokenId) localStorage.setItem("zeno_docsURI_" + tokenId.toString(), docsURI);
       } catch {}
       if (preview) URL.revokeObjectURL(preview);
       setForm({ location: "", latitude: "", longitude: "", size: "", price: "", description: "", imageFile: null, docsFile: null, docsIpfsCid: null });
