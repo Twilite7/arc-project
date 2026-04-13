@@ -86,35 +86,51 @@ export default function ListProperty({ wallet }) {
     loadFees();
   }, [wallet.provider, reg.netConfig?.registry]);
 
-  // I check if the connected wallet already has an ERC-8004 identity
-  // I scan all blocks in chunks since registration could have happened long ago
+  // I check if the connected wallet already has an ERC-8004 identity.
+  // tokenOfOwnerByIndex is unavailable so I scan backwards from a recent ID
+  // using ownerOf — fast because IDs are sequential and most wallets registered recently.
+  // I cache the result in localStorage so this only runs once per wallet.
   useEffect(() => {
     async function checkAgentId() {
       if (!wallet.provider || !wallet.address || !reg.netConfig) return;
+
+      // I serve from cache first
+      const cacheKey = `zeno_agentId_${wallet.address.toLowerCase()}`;
+      try {
+        const cached = localStorage.getItem(cacheKey);
+        if (cached) { setAgentId(cached); return; }
+      } catch {}
+
       try {
         const identity = new ethers.Contract(
-          reg.netConfig.erc8004Identity, ERC8004_IDENTITY_ABI, wallet.provider
+          reg.netConfig.erc8004Identity,
+          ["function ownerOf(uint256) view returns (address)",
+           "function balanceOf(address) view returns (uint256)"],
+          wallet.provider
         );
-        const currentBlock = await wallet.provider.getBlockNumber();
-        const CHUNK = 9000;
-        // I scan from block 0 in chunks to find any identity ever registered
-        for (let from = 0; from <= currentBlock; from += CHUNK) {
-          const to = Math.min(from + CHUNK - 1, currentBlock);
-          try {
-            const events = await identity.queryFilter(
-              identity.filters.Transfer(
-                "0x0000000000000000000000000000000000000000",
-                wallet.address
-              ), from, to
-            );
-            if (events.length > 0) {
-              // I take the most recent registration
-              const latest = events[events.length - 1];
-              const tokenId = latest.args?.[2] ?? BigInt(latest.topics[3]);
-              setAgentId(tokenId.toString());
-              return; // I stop scanning once found
+
+        // I check balance first — if 0, no identity registered
+        const bal = await identity.balanceOf(wallet.address);
+        if (bal === 0n) return;
+
+        // I scan backwards from a high ID — most registrations are recent
+        // I start at 2500 and work down in batches of 20 concurrent calls
+        const START  = 2500;
+        const BATCH  = 20;
+        for (let top = START; top > 0; top -= BATCH) {
+          const ids = Array.from({ length: BATCH }, (_, i) => BigInt(top - i)).filter(id => id > 0n);
+          const results = await Promise.allSettled(
+            ids.map(id => identity.ownerOf(id).then(owner => ({ id, owner })))
+          );
+          for (const r of results) {
+            if (r.status === "fulfilled" &&
+                r.value.owner.toLowerCase() === wallet.address.toLowerCase()) {
+              const found = r.value.id.toString();
+              setAgentId(found);
+              try { localStorage.setItem(cacheKey, found); } catch {}
+              return;
             }
-          } catch {}
+          }
         }
       } catch {}
     }
@@ -136,6 +152,12 @@ export default function ListProperty({ wallet }) {
       const receipt = await tx.wait();
       const newAgentId = BigInt(receipt.logs[0].topics[3]).toString();
       setAgentId(newAgentId);
+      // I cache the new Agent ID so it's found immediately on next visit
+      try {
+        localStorage.setItem(
+          `zeno_agentId_${wallet.address.toLowerCase()}`, newAgentId
+        );
+      } catch {}
       setStatus("Identity registered. Your Agent ID: " + newAgentId);
     } catch (e) { setStatus("Error: " + (e.reason || e.message)); }
     setAgentIdLoading(false);
