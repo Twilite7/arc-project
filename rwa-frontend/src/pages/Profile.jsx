@@ -169,6 +169,21 @@ export default function Profile({ wallet }) {
     const outcomeLabel = { completed: "Completed", rejected: "Rejected", expired: "Expired" };
     const jobLabel     = DEAL_STATUS[deal.jobStatus] ?? deal.jobStatus;
 
+    async function addToMetaMask() {
+      try {
+        await window.ethereum.request({
+          method: "wallet_watchAsset",
+          params: {
+            type: "ERC721",
+            options: {
+              address: net.registry,
+              tokenId: deal.tokenId,
+            },
+          },
+        });
+      } catch (e) { console.error("wallet_watchAsset failed:", e); }
+    }
+
     return (
       <div style={cardStyle}>
         {deal.imageSrc && (
@@ -215,12 +230,23 @@ export default function Profile({ wallet }) {
             </div>
           )}
 
-          <a href={`https://testnet.arcscan.app/tx/${deal.txHash}`}
-            target="_blank" rel="noopener noreferrer"
-            style={{ display: "inline-block", marginTop: 12, fontSize: 11,
-              color: "var(--mid)", textDecoration: "none", borderBottom: "1px solid var(--border)" }}>
-            View transaction
-          </a>
+          <div style={{ display: "flex", gap: 16, marginTop: 12, alignItems: "center" }}>
+            <a href={`https://testnet.arcscan.app/tx/${deal.txHash}`}
+              target="_blank" rel="noopener noreferrer"
+              style={{ fontSize: 11, color: "var(--mid)", textDecoration: "none",
+                borderBottom: "1px solid var(--border)" }}>
+              View transaction
+            </a>
+            {outcome === "completed" && (
+              <button onClick={addToMetaMask} style={{
+                fontSize: 11, padding: "4px 10px",
+                border: "1px solid var(--border)", borderRadius: 2,
+                background: "transparent", color: "var(--mid)", cursor: "pointer",
+              }}>
+                Add to MetaMask
+              </button>
+            )}
+          </div>
         </div>
       </div>
     );

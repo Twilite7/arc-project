@@ -8,6 +8,8 @@ import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/utils/Base64.sol";
+import "@openzeppelin/contracts/utils/Strings.sol";
 
 // I define only the ERC-8004 ValidationRegistry functions we call
 interface IERC8004Validation {
@@ -338,6 +340,40 @@ contract PropertyRegistry is ERC721, Ownable2Step, Pausable {
     }
 
     // ─── Read functions ───────────────────────────────────────────
+
+    // I return on-chain metadata as a base64-encoded data URI so MetaMask
+    // can display the NFT without any external server
+    function tokenURI(uint256 tokenId)
+        public view override tokenExists(tokenId) returns (string memory)
+    {
+        Property storage p = properties[tokenId];
+
+        // I extract image CID from the description JSON if present
+        string memory imageSrc = "";
+        bytes memory descBytes = bytes(p.description);
+        if (descBytes.length > 0) {
+            // I use the raw description as the image field hint —
+            // frontend stores {"desc":"...","image":"ipfs://..."} in description
+            imageSrc = p.description;
+        }
+
+        string memory json = Base64.encode(bytes(string(abi.encodePacked(
+            '{"name":"Zeno Estate #', Strings.toString(tokenId), '",',
+            '"description":"', p.location, '",',
+            '"image":"', imageSrc, '",',
+            '"attributes":[',
+                '{"trait_type":"Location","value":"', p.location, '"},',
+                '{"trait_type":"Size","value":"', p.size, '"},',
+                '{"trait_type":"Price","value":"', Strings.toString(p.price / 1e6), ' USDC"},',
+                '{"trait_type":"Status","value":"',
+                    p.status == Status.Available ? "Available" :
+                    p.status == Status.InEscrow  ? "In Escrow" : "Sold",
+                '"}',
+            ']}'
+        ))));
+
+        return string(abi.encodePacked("data:application/json;base64,", json));
+    }
 
     function getProperty(uint256 tokenId)
         external view tokenExists(tokenId) returns (Property memory) {
