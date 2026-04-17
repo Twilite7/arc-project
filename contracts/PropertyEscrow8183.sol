@@ -99,8 +99,8 @@ contract PropertyEscrow8183 is Ownable, Pausable, ReentrancyGuard {
     }
 
     // ─── Step 1: Buyer ───────────────────────────────────────────
-    // I lock USDC in this contract and create the ERC-8183 job.
-    // After this: seller calls setBudget() directly on ERC-8183, then calls fundJob() here.
+    // I atomically pull USDC from buyer, create the ERC-8183 job, and fund it.
+    // Seller only needs to call submitDeliverable() when ready.
     function buyNow(uint256 tokenId) external nonReentrant whenNotPaused {
         require(!activeDeal[tokenId], "Deal already active");
 
@@ -114,7 +114,7 @@ contract PropertyEscrow8183 is Ownable, Pausable, ReentrancyGuard {
         require(price > 0 && price <= MAX_PRICE, "Invalid price");
         require(registry.isVerified(tokenId),    "Property not verified by platform");
 
-        // I pull USDC from buyer — held here until fundJob or rejectDeal
+        // I pull USDC from buyer into this contract
         IERC20(USDC).safeTransferFrom(msg.sender, address(this), price);
 
         // I create ERC-8183 job: this contract=client, seller=provider, admin=evaluator
@@ -127,41 +127,21 @@ contract PropertyEscrow8183 is Ownable, Pausable, ReentrancyGuard {
             address(0)
         );
 
+        // I fund the job immediately — price passed in optParams, no setBudget needed
+        IERC20(USDC).forceApprove(ERC8183, price);
+        IERC8183(ERC8183).fund(jobId, abi.encode(price));
+
         tokenToJob[tokenId]   = jobId;
         tokenToBuyer[tokenId] = msg.sender;
         tokenToPrice[tokenId] = price;
         activeDeal[tokenId]   = true;
-        jobFunded[tokenId]    = false;
+        jobFunded[tokenId]    = true;
         registry.updateStatus(tokenId, 1);
-
         emit DealCreated(tokenId, jobId, msg.sender, seller, price);
-    }
-
-    // ─── Step 2: Seller ──────────────────────────────────────────
-    // I move USDC from this contract into ERC-8183 after seller has called setBudget().
-    // Seller must call setBudget(jobId, price, "0x") directly on ERC-8183 first.
-    // Then seller calls submit(jobId, deliverable, "0x") directly on ERC-8183.
-    function fundJob(uint256 tokenId) external nonReentrant whenNotPaused {
-        require(activeDeal[tokenId],                           "No active deal");
-        require(!jobFunded[tokenId],                           "Job already funded");
-        require(registry.ownerOf(tokenId) == msg.sender,      "Only seller can fund job");
-
-        uint256 jobId = tokenToJob[tokenId];
-        uint256 price = tokenToPrice[tokenId];
-
-        // I verify seller actually set the budget before we fund
-        (,,,,,uint256 budget,,,, ) = IERC8183(ERC8183).jobs(jobId);
-        require(budget == price, "Budget must match listing price");
-
-        // I approve ERC-8183 to pull exactly price from this contract, then fund
-        IERC20(USDC).forceApprove(ERC8183, price);
-        IERC8183(ERC8183).fund(jobId, "0x");
-
-        jobFunded[tokenId] = true;
         emit JobFunded(tokenId, jobId);
     }
 
-    // ─── Step 3: Admin — Release ─────────────────────────────────
+        // ─── Step 3: Admin — Release ─────────────────────────────────
     // Admin calls complete() on ERC-8183 first (pays seller automatically),
     // then calls this to transfer the NFT to buyer.
     function releaseDeal(uint256 tokenId) external onlyOwner whenNotPaused {

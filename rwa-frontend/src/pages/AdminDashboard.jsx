@@ -310,7 +310,7 @@ export default function AdminDashboard({ wallet }) {
         {card(<>
           {section("Deal Management")}
           <p style={{ fontSize: 12, color: "var(--mid)", marginBottom: 16, lineHeight: 1.6 }}>
-            Enter a token ID to load the active deal. Release after the seller has submitted
+            Enter a token ID to load the active deal. Release after the seller has submitted the deliverable. the deliverable. the deliverable.
             the deliverable on ERC-8183. Reject at any point to refund the buyer.
           </p>
 
@@ -377,8 +377,8 @@ export default function AdminDashboard({ wallet }) {
           {/* I explain why buttons are disabled */}
           {jobInfo && !canRelease && jobInfo.jobStatus !== 4 && (
             <p style={{ marginTop: 10, fontSize: 11, color: "var(--mid)" }}>
-              {jobInfo.jobStatus === 0 && "Waiting for seller to set budget and fund the job."}
-              {jobInfo.jobStatus === 1 && "Waiting for seller to submit the deliverable on ERC-8183."}
+              {jobInfo.jobStatus === 0 && "Job created — funding in progress."}
+              {jobInfo.jobStatus === 1 && "Waiting for seller to submit the deliverable."}
               {jobInfo.jobStatus === 2 && ""}
             </p>
           )}

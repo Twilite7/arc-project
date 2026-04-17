@@ -14,7 +14,7 @@ const ERC20_ABI = [
 
 // I define only the ERC-8183 functions the seller calls directly
 const ERC8183_ABI = [
-  "function setBudget(uint256 jobId, uint256 amount, bytes optParams) external",
+
   "function submit(uint256 jobId, bytes32 deliverable, bytes optParams) external",
   "function jobs(uint256) view returns (uint256,address,address,address,string,uint256,uint256,uint8,address,bytes32)",
 ];
@@ -397,21 +397,9 @@ export default function BuyProperty({ wallet, tokenId }) {
             </button>
           )}
 
-          {/* Seller: Step 1 — set budget + fund job combined (job Open=0, not yet funded) */}
-          {isSeller && prop.status === 1 && deal && jobStatus === 0 && !deal.isFunded && (
-            <button onClick={setBudgetAndFund} disabled={loading} style={{
-              padding: "12px", border: "none", background: "var(--charcoal)",
-              color: "var(--warm-white)", borderRadius: 2,
-              fontSize: 12, letterSpacing: "0.08em", textTransform: "uppercase",
-              cursor: "pointer", opacity: loading ? 0.7 : 1,
-            }}>
-              {loading
-                ? (status.startsWith("Step") ? status : "Processing...")
-                : `Step 1 — Set Budget & Fund · ${ethers.formatUnits(prop.price, 6)} USDC`}
-            </button>
-          )}
 
-          {/* Seller: Step 2 — submit deliverable on ERC-8183 (only when job is Funded=1) */}
+
+          {/* Seller: submit deliverable on ERC-8183 (job is Funded=1 immediately after buyNow) */}
           {isSeller && prop.status === 1 && deal && jobStatus === 1 && (
             <button onClick={submitDeliverable} disabled={loading} style={{
               padding: "12px", border: "none", background: "var(--charcoal)",
